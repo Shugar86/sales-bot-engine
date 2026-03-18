@@ -498,3 +498,47 @@ Starting test count: 303
 6. ✅ Price Shock Handling
 7. ✅ Off-topic Handling
 
+
+## ARCHITECTURE V3 — BUILD COMPLETE
+
+### Commit: 92de0c5
+
+### What was built:
+
+#### Phase 1: Core Pipeline (v3) — 4 new modules
+- **`src/core/context_reader.py`** — ChatContext class: reads last N messages, detects topic, vibe, who's talking, is it directed at me
+- **`src/core/vibe_checker.py`** — VibeCheck: should I respond? keyword/topic/taboo/humor matching, no LLM needed
+- **`src/core/decision_gate.py`** — Decision: respond/react/leave_read/disengage/wait. 35% leave-on-read, 15% emoji reactions, night slowdown
+- **`src/core/memory_writer.py`** — JSON-based user memory: interaction history, personal details, funnel tracking, source chat for DMs
+
+#### Phase 2: Orchestrator v3
+- **`src/core/orchestrator_v3.py`** — Full pipeline: RECEIVE → CONTEXT → VIBE_CHECK → MEMORY → DECIDE → GENERATE → HUMANIZE → SEND → REMEMBER
+
+#### Phase 3: Telegram Userbot Enhancement
+- **`send_reaction()`** — Emoji reactions to messages (Telethon API)
+- **`get_chat_history()`** — Read last N messages from chat for context
+
+#### Phase 4: Persona YAML v3
+All 3 personas (kormoved, fitness, smm_blogger) updated with:
+- `vibe.personality` + `vibe.backstory`
+- `behavior.always` / `on_dm` / `on_food_question` / `on_bot_question` / `on_taboo` / `on_disengage`
+- `anti_spam.leave_on_read` / `emoji_reaction` / `night_slowdown`
+- `memory` section
+
+#### Phase 5: Tests
+- test_context_reader.py: 18 tests
+- test_vibe_checker.py: 20 tests
+- test_decision_gate.py: 22 tests
+- test_memory_writer.py: 20 tests
+- test_orchestrator_v3.py: 32 tests (integration)
+- **Total: 562 tests passing (was 450, +112 new)**
+
+### Philosophy implemented:
+The bot is NOT a sales bot. The bot is a PERSON who happens to sell something.
+- Read N last messages → is there something "in vibe" for me?
+- If yes → respond naturally (personal story, context, humor)
+- If no → wait, maybe react with emoji, maybe leave on read
+- In DMs → remember which chat user came from, chat naturally
+- No "offtopic" concept — EVERYTHING is context-appropriate if in character
+- Taboos: politics, religion → "Ну это не моя тема"
+
