@@ -16,6 +16,7 @@ from typing import Callable, Optional
 
 from ..core.persona_manager import PersonaConfig, PersonaManager, discover_personas
 from ..core.router import MessageRouter, Decision, RouteResult
+# Decision.DISENGAGE = "disengage" — отступить, человек просит отстать
 from ..responders.generator import ResponseGenerator, GeneratedResponse
 from ..monitors.telegram_userbot import TelegramUserbot, UserbotMessage
 from ..monitors.telegram_monitor import TelegramMonitor, TelegramMessage
@@ -247,6 +248,15 @@ class SalesBotOrchestratorV2:
             runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
             return
         
+        # DISENGAGE — человек просит отстать
+        if route_result.decision == Decision.DISENGAGE:
+            logger.info(f"[{runtime.config.name}] User asked to stop in {msg.chat_id}")
+            runtime.stats["ignored"] += 1
+            runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
+            # Note: в будущем тут можно добавить blacklist чата на N часов
+            runtime.state = BotState.IDLE
+            return
+        
         # === GENERATION ===
         runtime.state = BotState.GENERATING
         
@@ -264,11 +274,13 @@ class SalesBotOrchestratorV2:
                     dm_history="",
                     group_context=group_context,
                     funnel_stage=funnel_stage,
+                    persona_name=runtime.config.name,
                 )
             else:
                 response = await runtime.generator.generate_group_response(
                     message_text=msg.text,
                     chat_context=chat_context,
+                    persona_name=runtime.config.name,
                 )
         except Exception as e:
             logger.error(f"[{runtime.config.name}] Generation error: {e}")

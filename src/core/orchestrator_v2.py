@@ -110,11 +110,15 @@ class SalesBotOrchestratorV2:
             contract=contract,
         )
         
-        # Generator (slow model — generate response)
+        # Generator (slow model — generate response, with response examples)
         generator = ResponseGenerator(
             llm_client=llm,
             model=config.generator_model,
             contract=contract,
+            response_examples=[
+                {"trigger": ex.trigger, "bad": ex.bad_response, "good": ex.good_response}
+                for ex in config.response_examples
+            ] if config.response_examples else None,
         )
         
         # Anti-spam (per-persona limits)
@@ -126,9 +130,12 @@ class SalesBotOrchestratorV2:
             cooldown_sec=config.anti_spam.min_delay_between_messages,
         )
         
-        # Memory (per-persona directory)
+        # Memory (per-persona directory, persona-aware entity extraction)
         persona_memory_dir = os.path.join(self.memory_dir, config.name.lower().replace(" ", "_"))
-        memory = UserMemoryStore(memory_dir=persona_memory_dir)
+        memory = UserMemoryStore(
+            memory_dir=persona_memory_dir,
+            persona_name=config.name,
+        )
         
         # Dedup
         dedup = DeduplicationStore(
@@ -246,6 +253,27 @@ class SalesBotOrchestratorV2:
             runtime.state = BotState.IDLE
             runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
             return
+        
+        # === LEAVE ON READ (human-like behavior) ===
+        # Real humans don't respond to ~35% of messages they read
+        if not msg.is_dm and runtime.antispam.should_leave_on_read():
+            logger.debug(f"[{runtime.config.name}] Leave on read: {msg.message_id}")
+            runtime.stats["ignored"] += 1
+            runtime.state = BotState.IDLE
+            runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
+            return
+        
+        # === EMOJI REACTION (instead of text) ===
+        # Sometimes 👍 is more natural than a paragraph
+        if not msg.is_dm and runtime.antispam.should_use_emoji_reaction():
+            emoji = runtime.antispam.get_emoji_reaction(msg.text)
+            if emoji:
+                logger.info(f"[{runtime.config.name}] Emoji reaction: {emoji} to {msg.message_id}")
+                await self._send_emoji_reaction(runtime, msg, emoji)
+                runtime.stats["responses_sent"] += 1
+                runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
+                runtime.state = BotState.IDLE
+                return
         
         # === GENERATION ===
         runtime.state = BotState.GENERATING
@@ -376,6 +404,43 @@ class SalesBotOrchestratorV2:
             
         except Exception as e:
             logger.error(f"[{runtime.config.name}] Send error: {e}")
+            return False
+    
+    async def _send_emoji_reaction(
+        self,
+        runtime: PersonaRuntime,
+        msg: IncomingMessage,
+        emoji: str,
+    ) -> bool:
+        """Send emoji reaction instead of text response."""
+        try:
+            monitor = runtime.monitor
+            config = runtime.config
+            
+            if config.platform == "telegram" and isinstance(monitor, TelegramUserbot):
+                # Telethon: use SendReactionRequest
+                try:
+                    from telethon.tl.functions.messages import SendReactionRequest
+                    from telethon.tl.types import ReactionEmoji
+                    await monitor.client(SendReactionRequest(
+                        peer=int(msg.chat_id),
+                        msg_id=msg.message_id,
+                        reaction=[ReactionEmoji(emoticon=emoji)],
+                    ))
+                    return True
+                except ImportError:
+                    # Telethon not available — skip reaction
+                    logger.debug("Telethon not available for reactions")
+                    return False
+                except Exception as e:
+                    logger.warning(f"Reaction failed: {e}")
+                    return False
+            
+            # For other platforms — no reaction support, silently skip
+            return False
+            
+        except Exception as e:
+            logger.error(f"[{runtime.config.name}] Emoji reaction error: {e}")
             return False
     
     async def _run_telegram_userbot(

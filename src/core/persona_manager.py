@@ -49,9 +49,17 @@ class DMModeConfig:
 
 
 @dataclass
+class ResponseExample:
+    """Good/bad response pair for training the persona."""
+    trigger: str = ""
+    bad_response: str = ""
+    good_response: str = ""
+
+
+@dataclass
 class AntiSpamConfig:
-    min_delay_between_messages: int = 120
-    max_delay_between_messages: int = 600
+    min_delay_between_messages: int = 30    # was 120 → human-realistic
+    max_delay_between_messages: int = 300   # was 600 → 5min max
     typing_simulation: bool = True
     random_typos: bool = False
 
@@ -91,6 +99,9 @@ class PersonaConfig:
     
     # Anti-spam
     anti_spam: AntiSpamConfig = field(default_factory=AntiSpamConfig)
+    
+    # Response examples (for Turing test quality)
+    response_examples: list[ResponseExample] = field(default_factory=list)
     
     # Knowledge base
     knowledge_file: str = ""
@@ -145,11 +156,20 @@ def load_persona(yaml_path: str) -> PersonaConfig:
     # Parse anti-spam
     sp = persona_data.get("anti_spam", {})
     anti_spam = AntiSpamConfig(
-        min_delay_between_messages=sp.get("min_delay_between_messages", 120),
-        max_delay_between_messages=sp.get("max_delay_between_messages", 600),
+        min_delay_between_messages=sp.get("min_delay_between_messages", 30),
+        max_delay_between_messages=sp.get("max_delay_between_messages", 300),
         typing_simulation=sp.get("typing_simulation", True),
         random_typos=sp.get("random_typos", False),
     )
+    
+    # Parse response examples
+    response_examples = []
+    for ex in persona_data.get("response_examples", []):
+        response_examples.append(ResponseExample(
+            trigger=ex.get("trigger", ""),
+            bad_response=ex.get("bad_response", ""),
+            good_response=ex.get("good_response", ""),
+        ))
     
     # Product
     prod = persona_data.get("product", {})
@@ -179,6 +199,7 @@ def load_persona(yaml_path: str) -> PersonaConfig:
         examples_file=persona_data.get("examples_file", ""),
         router_model=persona_data.get("router_model", "openrouter/google/gemini-2.0-flash-lite"),
         generator_model=persona_data.get("generator_model", "openrouter/hunter-alpha"),
+        response_examples=response_examples,
         yaml_path=yaml_path,
     )
     

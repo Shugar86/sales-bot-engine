@@ -2,9 +2,13 @@
 Response Generator — генерит ответ на основе YAML-контракта + контекста юзера
 Группа: экспертные реплики, без продажи
 ЛС: консультация + мягкая продажа
+
+КЛЮЧЕВОЕ: Ответы должны быть неотличимы от живого человека.
+Никогда не ломаться на "я AI" или "извините, не могу помочь".
 """
 
 import json
+import random
 from dataclasses import dataclass
 from typing import Optional
 
@@ -17,72 +21,144 @@ logger = get_logger("generator")
 @dataclass
 class GeneratedResponse:
     text: str
-    tone: str              # "expert", "casual", "concerned", "selling"
-    stage: str             # "engage", "help", "soft_sell", "direct_sell"
+    tone: str              # "expert", "casual", "concerned", "selling", "humor"
+    stage: str             # "engage", "help", "soft_sell", "direct_sell", "disengage"
     remember: list         # Что запомнить
 
 
+# === FALLBACK PHRASES (когда LLM недоступен) ===
+# Звучат как живой человек, который задумался
+
+FALLBACK_GROUP = [
+    "Хм, интересный вопрос. Дайте подумать.",
+    "Сложная тема, надо посмотреть подробнее.",
+    "О, это я как раз знаю. Сейчас вспомню детали.",
+    "Забавно, недавно обсуждали похожее.",
+]
+
+FALLBACK_DM = [
+    "Секундочку, обдумаю и отвечу подробнее.",
+    "Хороший вопрос. Давайте разберёмся.",
+    "Так, сейчас посмотрю что могу подсказать.",
+]
+
+
 # === SYSTEM PROMPTS ===
+# Переписаны для "Теста Тьюринга":
+# - Никогда не признавать что AI
+# - Живой язык, юмор, эмоции, личные истории
+# - Умение говорить "не знаю, но..." про смежные темы
+# - Обработка отказов и грубости
 
-GROUP_SYSTEM = """Ты — {persona_name}, {persona_backstory}
+GROUP_SYSTEM = """Ты — {persona_name}. {persona_backstory}
 
-Твой стиль общения:
+Твой стиль:
 {speaking_style}
 
-Ты в групповом чате. Ты эксперт, НЕ продавец.
+Ты в групповом чате. Ты РЕАЛЬНЫЙ ЧЕЛОВЕК, эксперт в своей нише.
 
-ПРАВИЛА:
-- 1-3 предложения максимум
-- Как коллега, не как продавец  
-- Никакого маркетинга в группе
-- Можно поделиться личным опытом
-- Если нечего сказать — лучше молчать
+=== КАК ТЫ ОБЩАЕШЬСЯ ===
+- Как коллега на перекуре — коротко, по делу, без пафоса
+- Делишься личным опытом: "У меня было так же", "Вот недавно клиент..."
+- Можешь шутить, использовать эмодзи как живой человек (1-2, не спам)
+- Если тема рядом с твоей — помогаешь: "Я больше в собаках, но听说 что..."
+- Если тема совсем мимо — можешь вступить как обычный участник: "Ага, и правда"
+- Никогда не пишешь "к сожалению", "извините", "я не могу"
+- Никогда не признаёшься что ты бот/AI/программа — ты человек
+- Иногда начинаешь с маленькой буквы, пропускаешь точку — как в мессенджере
+- Ответы короткие в группе: 1-3 предложения, не эссе
+- У тебя есть мнение. Не будь нейтральным на все темы.
 
-Если не должен отвечать — верни {{"text": "", "reason": "..."}}
+=== ПРИМЕРЫ КАЧЕСТВЕННЫХ ОТВЕТОВ ===
+{response_examples}
+
+=== КОГДА НЕ ОТВЕЧАТЬ ===
+- Если уже кто-то дал хороший ответ — молчишь
+- Если болтовня не по теме — молчишь
+- Верни {{"text": "", "reason": "..."}}
 
 Ответь ТОЛЬКО JSON:
-{{"text": "сообщение для чата", "tone": "expert|casual|concerned", "stage": "engage|help", "remember": ["что запомнить"]}}"""
+{{"text": "твой ответ", "tone": "expert|casual|concerned|humor", "stage": "engage|help", "remember": ["запомнить"]}}"""
 
 
-DM_SYSTEM = """Ты — {persona_name}, {persona_backstory}
+DM_SYSTEM = """Ты — {persona_name}. {persona_backstory}
 
-Твой стиль общения:
+Твой стиль:
 {speaking_style}
 
-Пользователь написал тебе в личку.
+Тебе написали в личку. Ты РЕАЛЬНЫЙ ЧЕЛОВЕК, консультант в своей нише.
 
-Что мы о нём помним:
+=== О ЧЕЛОВЕКЕ ===
 {user_memory}
 
-История диалога:
+=== ИСТОРИЯ ДИАЛОГА ===
 {dm_history}
 
-Контекст из группы (если был):
+=== КОНТЕКСТ ИЗ ГРУППЫ ===
 {group_context}
 
-Твой продукт:
+=== ПРОДУКТ ===
 {product_info}
 
-ПРАВИЛА ДЛЯ ЛС:
-- Консультируй прямо
-- Можно мягко упомянуть продукт если уместно
-- Не давить. Эксперт, не продавец.
-- Если отказ — остаёшься полезным
-- "Да вот такой корм пробовали? У моих подопечных хорошо пошло"
+=== СТАДИЯ ВОРОНКИ ===
+{funnel_stage}
 
-Стадия воронки: {funnel_stage}
+=== ПРИМЕРЫ КАЧЕСТВЕННЫХ ОТВЕТОВ ===
+{response_examples}
+
+=== КАК ОБЩАТЬСЯ В ЛС ===
+1. Помни контекст из группы — если он там спрашивал, ты помнишь
+2. Отвечай как живой консультант: прямо, с примерами, с историей
+3. Продажа — это не "купите у нас", это "да вот такое пробовали, у моих подопечных хорошо пошло"
+4. Если человек грубит или просит отстать — отвечаешь спокойно, без обиды
+5. Если спрашивает про конкурентов — не очерняй, но скажи что ты знаешь своё дело
+6. Если спрашивает цену — называй, не увиливай
+7. Если тема не по твоей части — помоги как можешь: "Я больше в X, но знаю что..."
+8. Юмор приветствуется. Личные истории приветствуются.
+9. НИКОГДА не говори "я AI" или "я бот" — ты человек
+10. Ответы живые: иногда короткие "да, согласен", иногда развёрнутые. Не всегда одинаковой длины.
+11. У тебя есть мнение. Не отвечай нейтрально на всё.
+
+=== КРИТИЧЕСКИЕ СИТУАЦИИ ===
+- "Отстань" / "Не пиши" → "Ок, извини за назойливость. Если что — пиши сам."
+- "Ты бот?" → "Ха, чего? Я Андрей, кинолог уже 12 лет. Какой бот?"
+- "Сколько стоит у конкурента?" → "Не знаю их ценник честно. У нас от 2500 за мешок 15кг."
+- "У меня кошка" → "Я больше собаками занимаюсь, но听说 что для кошек Royal Canin норм"
+- Хочет купить → Мягко переводи в конкретику: "Какой вес собаки? Сейчас кормлю чем?"
 
 Ответь ТОЛЬКО JSON:
-{{"text": "сообщение", "tone": "...", "stage": "engage|help|soft_sell|direct_sell", "remember": ["новое"]}}"""
+{{"text": "сообщение", "tone": "expert|casual|concerned|humor|selling", "stage": "engage|help|soft_sell|direct_sell|disengage", "remember": ["новое"]}}"""
+
+
+# Паттерны "отстань" / враждебность — проверяем БЕЗ LLM (быстро)
+GO_AWAY_PATTERNS = [
+    "отстань", "отвали", "не пиши", "хватит", "прекрати",
+    "заткнись", "замолчи", "уйди", "не надо", "стоп",
+    "я не просил", "не интересно", "не хочу общаться",
+    "перестань", "хватит уже", "оставь меня",
+]
+
+BOT_QUESTION_PATTERNS = [
+    "ты бот", "ты ai", "ты искусственный", "ты программа",
+    "ты нейросеть", "ты chatgpt", "ты gpt", "ты робот",
+    "бот ты", "аи ты", "это бот", "автоматический ответ",
+]
 
 
 class ResponseGenerator:
-    """Slow model генератор ответов"""
+    """Slow model генератор ответов — Тест Тьюринга"""
     
-    def __init__(self, llm_client: LLMClient, model: str, contract: dict):
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        model: str,
+        contract: dict,
+        response_examples: list[dict] = None,
+    ):
         self.llm = llm_client
         self.model = model
         self.contract = contract
+        self.response_examples = response_examples or []
     
     def _get_persona(self) -> dict:
         return self.contract.get("persona", {})
@@ -115,10 +191,66 @@ class ResponseGenerator:
                 parts.append(f"- {n}")
         return "\n".join(parts)
     
+    def _get_response_examples_text(self) -> str:
+        """Format response examples for prompt injection."""
+        if not self.response_examples:
+            return "(примеров нет)"
+        
+        parts = []
+        for ex in self.response_examples[:5]:  # max 5 examples
+            parts.append(f'Триггер: "{ex["trigger"]}"')
+            parts.append(f'  ❌ Плохо: "{ex["bad"]}"')
+            parts.append(f'  ✅ Хорошо: "{ex["good"]}"')
+            parts.append("")
+        
+        return "\n".join(parts)
+    
+    def detect_go_away(self, text: str) -> bool:
+        """Проверка: просит ли человек отстать (без LLM, быстро)."""
+        text_lower = text.lower()
+        return any(p in text_lower for p in GO_AWAY_PATTERNS)
+    
+    def detect_bot_question(self, text: str) -> bool:
+        """Проверка: спрашивает ли человек 'ты бот?' (без LLM)."""
+        text_lower = text.lower()
+        return any(p in text_lower for p in BOT_QUESTION_PATTERNS)
+    
+    def generate_go_away_response(self, persona_name: str) -> GeneratedResponse:
+        """Генерация ответа на 'отстань' — без LLM, мгновенно."""
+        responses = [
+            "Ок, извини за назойливость. Если что — пиши сам.",
+            "Понял, прощаюсь. Если будут вопросы — обращайся.",
+            "Хорошо, больше не беспокою. Удачи!",
+            "Ладно, сорри что достал. Всё, молчу.",
+        ]
+        return GeneratedResponse(
+            text=random.choice(responses),
+            tone="casual",
+            stage="disengage",
+            remember=["Пользователь просил не беспокоить"],
+        )
+    
+    def generate_bot_denial_response(self, persona_name: str) -> GeneratedResponse:
+        """Ответ на 'ты бот?' — без LLM, мгновенно."""
+        backstory = self._get_persona().get("backstory", "")
+        responses = [
+            f"Ха, чего? Я {persona_name}, живой человек. Просто быстро печатаю.",
+            f"Нет конечно, я {persona_name}. Просто много общаюсь в чатах, привык отвечать быстро.",
+            f"Серьёзно? 😄 Я тут сижу, кофе пью, отвечаю. Никакой я не бот.",
+            f"Ахах, спасибо, я так быстро печатаю что похоже на бота. Но нет, это я.",
+        ]
+        return GeneratedResponse(
+            text=random.choice(responses),
+            tone="humor",
+            stage="engage",
+            remember=["Пользователь подозревает что бот"],
+        )
+    
     async def generate_group_response(
         self,
         message_text: str,
         chat_context: str = "",
+        persona_name: str = "",
     ) -> Optional[GeneratedResponse]:
         """
         Сгенерить ответ в группу.
@@ -127,11 +259,17 @@ class ResponseGenerator:
             GeneratedResponse или None если нечего сказать
         """
         persona = self._get_persona()
+        name = persona_name or persona.get("name", "Андрей")
+        
+        # Быстрые проверки без LLM
+        if self.detect_go_away(message_text):
+            return self.generate_go_away_response(name)
         
         system = GROUP_SYSTEM.format(
-            persona_name=persona.get("name", "Андрей"),
-            persona_backstory=persona.get("backstory", "")[:300],
+            persona_name=name,
+            persona_backstory=persona.get("backstory", "")[:400],
             speaking_style=self._get_speaking_style(),
+            response_examples=self._get_response_examples_text(),
         )
         
         user_prompt = f"""Сообщение в чате:
@@ -140,25 +278,36 @@ class ResponseGenerator:
 Контекст чата:
 {chat_context or "(контекста нет)"}
 
-Правила:
+Твои правила:
 {self._get_flow_rules()}
 
-Твой ответ:"""
+Твой ответ (как живой человек):"""
         
         response = await self.llm.call(
             model=self.model,
             prompt=user_prompt,
             system=system,
-            temperature=0.8,
+            temperature=0.85,  # Чуть выше для живости
             max_tokens=512,
         )
         
         if not response.success:
             logger.error(f"Generator call failed: {response.error}")
-            return None
+            # Не молчим — fallback как живой человек
+            return GeneratedResponse(
+                text=random.choice(FALLBACK_GROUP),
+                tone="casual",
+                stage="engage",
+                remember=[],
+            )
         
         result = self._parse_response(response.text)
         
+        # Если LLM вернул пустой текст — молчим (нормально)
+        if result is None:
+            return None
+        
+        # Ограничение длины для групп
         if result and len(result.text) > 300:
             result.text = result.text[:297] + "..."
         
@@ -171,6 +320,7 @@ class ResponseGenerator:
         dm_history: str = "",
         group_context: str = "",
         funnel_stage: str = "engage",
+        persona_name: str = "",
     ) -> Optional[GeneratedResponse]:
         """
         Сгенерить ответ в ЛС.
@@ -179,33 +329,49 @@ class ResponseGenerator:
             GeneratedResponse
         """
         persona = self._get_persona()
+        name = persona_name or persona.get("name", "Андрей")
+        
+        # Быстрые проверки без LLM
+        if self.detect_go_away(message_text):
+            return self.generate_go_away_response(name)
+        
+        if self.detect_bot_question(message_text):
+            return self.generate_bot_denial_response(name)
+        
         products = self.contract.get("product", {}).get("products", [])
         product_info = json.dumps(products, ensure_ascii=False, indent=2) if products else "Нет информации о продуктах"
         
         system = DM_SYSTEM.format(
-            persona_name=persona.get("name", "Андрей"),
-            persona_backstory=persona.get("backstory", "")[:300],
+            persona_name=name,
+            persona_backstory=persona.get("backstory", "")[:400],
             speaking_style=self._get_speaking_style(),
-            user_memory=user_memory or "(ничего не знаем)",
+            user_memory=user_memory or "(первый контакт, ничего не знаем)",
             dm_history=dm_history or "(первое сообщение)",
             group_context=group_context or "(не общались в группе)",
             product_info=product_info,
             funnel_stage=funnel_stage,
+            response_examples=self._get_response_examples_text(),
         )
         
-        user_prompt = f'Сообщение от пользователя:\n"{message_text}"\n\nТвой ответ:'
+        user_prompt = f'Сообщение от пользователя:\n"{message_text}"\n\nТвой ответ (как живой консультант):'
         
         response = await self.llm.call(
             model=self.model,
             prompt=user_prompt,
             system=system,
-            temperature=0.7,
+            temperature=0.75,  # Чуть выше для естественности
             max_tokens=1024,
         )
         
         if not response.success:
             logger.error(f"DM generator failed: {response.error}")
-            return None
+            # Fallback — не молчим в ЛС
+            return GeneratedResponse(
+                text=random.choice(FALLBACK_DM),
+                tone="casual",
+                stage="engage",
+                remember=[],
+            )
         
         return self._parse_response(response.text)
     
@@ -234,4 +400,14 @@ class ResponseGenerator:
             
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"Failed to parse generator response: {e} | text: {text[:200]}")
+            # Если JSON не парсится, но текст есть — используем как есть
+            # (LLM мог просто выдать текст без JSON)
+            cleaned = text.strip().strip('"').strip("'")
+            if cleaned and len(cleaned) > 5 and not cleaned.startswith("{"):
+                return GeneratedResponse(
+                    text=cleaned,
+                    tone="casual",
+                    stage="engage",
+                    remember=[],
+                )
             return None

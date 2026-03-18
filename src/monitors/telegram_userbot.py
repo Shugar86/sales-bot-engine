@@ -211,6 +211,12 @@ class TelegramUserbot:
             if msg.user_id == str(self._my_id):
                 return
             
+            # Skip other bots (anti-bot-to-bot loop)
+            sender = event.message.sender
+            if sender and getattr(sender, "bot", False):
+                logger.debug(f"Skipping bot message from {msg.user_id}")
+                return
+            
             # Filter by allowed chats (DM always passes)
             if not msg.is_dm and self._allowed_chats:
                 if msg.chat_id not in self._allowed_chats:

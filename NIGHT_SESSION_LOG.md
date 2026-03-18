@@ -1,71 +1,82 @@
-# Night Session Log
+# Night Session Log — Cycle 2
 
-## Started: 2026-03-18 20:31 GMT+1
+## Started: 2026-03-18 21:00 GMT+1
 
-### Phase 1: Code Review (BALDY + ARCHITECT + CODER)
+---
 
-#### BALDY's Bug Report:
-1. **persona_manager.py line ~180**: Wrong relative imports — `from .telegram_userbot` should be `from ..monitors.telegram_userbot`
-2. **persona_manager.py line ~192**: Same — `from .vk_monitor` should be `from ..monitors.vk_monitor`
-3. **telegram_userbot.py**: `raw = None` in dataclass lacks type annotation
-4. **Format mismatch**: fitness/persona.yaml uses v2 format (top-level `name`), korm/persona.yaml uses v1 format (nested `persona.name`). persona_manager.py expects v2. Need adapter.
-5. **user_memory.py**: `_extract_dog_info` is hardcoded for kormoved persona
-6. **VKMonitor**: sync `run()` blocks the event loop
+## CYCLE 1: ARCHITECT REVIEW
 
-#### ARCHITECT's Review:
-- Orchestrator.py is v1-only (single persona, Bot API). Needs complete rewrite for v2 multi-persona
-- Router/Generator use `TelegramMessage` type but v2 has `UserbotMessage` and `VKMessage` — need unified message type
-- No message type abstraction layer
-- No platform adapter pattern
+### Turing Test Failures Found:
 
-#### CODER's Assessment:
-- Missing tests for: persona_manager, telegram_userbot, vk_monitor, anti_spam, dedup, llm_client
-- Integration test doesn't cover multi-persona flow
+1. **Memory hardcoded to kormoved** — `_extract_dog_info()` only extracts dog-related info. Fitness/SMM personas have no entity extraction. A person mentions "膝盖疼" (knee pain) to the fitness bot — nothing gets remembered.
 
-### Phase 2: Wiring Everything Together
+2. **Anti-spam delays are INSANE** — min=180s, max=900s. A real person in an active group chat responds in 30s-3min, not 3-15 minutes. This screams "bot" to anyone paying attention.
 
-- Created `src/models/message.py` — unified `IncomingMessage` type for all platforms
-- Rewrote `orchestrator.py` → v2 multi-persona orchestrator (`SalesBotOrchestratorV2`)
-- Created `orchestrator_legacy.py` — preserved v1 orchestrator for backward compatibility
-- Updated `main.py` — supports both v1 (BOT_MODE=v1) and v2 (default) modes
-- Fixed persona_manager.py imports (`.telegram_userbot` → `..monitors.telegram_userbot`)
-- Fixed telegram_userbot.py `raw` field type annotation
-- Updated test_integration.py imports to use orchestrator_legacy
-- **45/45 existing tests PASS** ✅
+3. **No "leave on read" behavior** — The bot either responds or ignores (LLM decision). Real humans READ messages and don't reply ~40% of the time. Need probabilistic "seen but no response."
 
-### Phase 3: Adding Tests for v2
+4. **No time-of-day awareness** — A bot answering at 3 AM is suspicious. Real people sleep. Need activity windows per persona.
 
-Created 6 new test files:
-- tests/test_persona_manager.py — 16 tests (loading, discovery, validation)
-- tests/test_telegram_userbot.py — 12 tests (parsing, mock Telethon, callbacks)
-- tests/test_vk_monitor.py — 5 tests (message parsing, type detection)
-- tests/test_anti_spam.py — 9 tests (rate limiting, cooldowns, delays)
-- tests/test_dedup.py — 7 tests (deduplication, persistence)
-- tests/test_message_model.py — 6 tests (IncomingMessage, Platform)
-- tests/test_orchestrator_v2.py — 9 tests (loading, pipeline, status)
+5. **No emoji reactions** — Sometimes 👍 or 😂 is more natural than a full response. Currently only text responses.
 
-**111/111 tests PASS** ✅ (was 45 before)
+6. **Persona YAML key mismatch** — kormoved uses `triggers.respond_when` but persona_manager.py expects `respond_triggers`. The v1→v2 adapter `_persona_to_contract()` reads `config.respond_triggers` which may not match.
 
-### Phase 4: Creating Personas
+7. **`response_examples` field missing** — Task specifically asks for good/bad response pairs in persona YAML. Not implemented.
 
-- Created `personas/smm_blogger/persona.yaml` — SMM manager "Lera"
-- Created `personas/kormoved/persona.yaml` — Dog food expert "Андрей" (v2 format, based on contracts/korm/)
-- Verified all 3 personas load via `discover_personas()` ✅
+8. **`datetime.utcnow()` deprecated** — 146 pytest warnings. Easy fix.
 
-### Phase 5: Docker Setup
+9. **No conversation threading** — Bot doesn't know if it already responded in a thread. Could double-respond.
 
-- Created `Dockerfile` (Python 3.12-slim)
-- Created `docker-compose.yml` (single container, multi-persona mode, env vars)
-- Created `.env.example` with all required variables
+10. **Generator always outputs full text** — Should sometimes just react with emoji instead of typing a paragraph.
 
-### Phase 6: Final Report
+11. **`_extract_dog_info` is called for ALL personas** — Even fitness/smm personas run through dog breed extraction. Wasteful and wrong.
 
-- Created `REPORT.md`
-- Committed all changes to git
+12. **Missing `__init__.py` for models** — `src/models/__init__.py` exists but checking completeness.
 
-## FINAL STATUS: ✅ 111/111 tests passing, 0 regressions
-- 45 existing tests preserved
-- 66 new tests added
-- 3 personas created
-- Docker setup ready
-- v1 backward compatible
+### Code Quality Issues:
+- `_extract_dog_info` should be pluggable per-persona
+- No retry logic in user memory (file corruption crashes)
+- `get_recent_messages` reads ALL user files on every message — O(n*m) performance
+- No TTL or cleanup for old memory entries
+
+---
+
+## CYCLE 1: BALDY RESEARCH
+
+### Source: "Human or Bot: How AI Gives Itself Away in Conversation" (humanornot.so, Feb 2026)
+
+Key findings from Turing test game analysis:
+
+1. **Perfect Punctuation = Bot** — Humans on phones: lowercase starts, missing periods, typos. AI defaults to "correct" writing even in casual chat. A perfectly formatted list in a 2-minute chat = bot.
+
+2. **Response Latency** — Humans: variable timing (short words instant, complex thoughts seconds, distracted by life). AI: uniform latency, same delay for simple and complex questions. TEST: Ask complex → simple question, same delay = bot.
+
+3. **Over-Explaining Syndrome** — AI loves to be helpful. Ask "Do you like pizza?" → Human: "Yeah, obsessed." Bot: "I don't eat, but pizza is popular globally with many toppings." The repetition of context nobody asked for = hallmark of AI.
+
+4. **Forced Politeness** — AI tries very hard to be friendly. In casual settings this is a RED FLAG. Real people are sometimes blunt, sarcastic, or disinterested.
+
+5. **Safe Answers** — AI avoids controversy. Humans have opinions (even wrong ones). Generic "I'm not sure about that" to viral news = bot.
+
+6. **Memory Inconsistency** — Bots lose the thread in meta-conversations. May contradict 3 sentences earlier. STRATEGY: Mention fake name early, reference later — bot hallucinates or plays along.
+
+### Telegram Userbot Best Practices (from Stack Overflow, Reddit, n8n community):
+
+1. **Typing indicator** — Telegram typing lasts 5 seconds, need to re-send periodically for long processing
+2. **Telethon SetTypingRequest** — Use `SendMessageTypingAction()` for userbot typing simulation
+3. **Variable typing speed** — Should correlate with message length AND complexity
+4. **Session management** — Each persona needs independent session file
+
+### Anti-Detect Patterns (synthesized from research):
+
+1. **Delays**: 30-300s for active chat (not 180-900s). Human in active group: 30s-3min response.
+2. **Leave on read**: 30-40% of messages should be "seen but not responded" — humans don't answer everything
+3. **Time windows**: Activity should follow human patterns — active 8-23h, quiet at night
+4. **Emoji reactions**: Sometimes 👍 is more natural than typing a full response
+5. **Response length variance**: Mix short ("да, согласен") with longer expert answers
+6. **Typos**: Occasional lowercase starts, missing punctuation in casual messages
+7. **Opinions**: Have preferences, don't be neutral on everything
+
+---
+
+## CYCLE 1: CODER FIX
+
+(implementation to be documented)

@@ -201,7 +201,7 @@ class TestLoadPersona:
         assert persona.name == "Minimal"
         assert persona.platform == "telegram"  # default
         assert persona.account_type == "userbot"  # default
-        assert persona.anti_spam.min_delay_between_messages == 120  # default
+        assert persona.anti_spam.min_delay_between_messages == 30  # default
     
     def test_load_nonexistent_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):

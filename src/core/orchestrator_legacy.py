@@ -167,6 +167,14 @@ class SalesBotOrchestrator:
             self.state = BotState.IDLE
             self.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
             return
+        
+        # DISENGAGE — человек просит отстать
+        if route_result.decision == Decision.DISENGAGE:
+            logger.info(f"User asked to stop in {msg.chat_id}")
+            self.stats["ignored"] += 1
+            self.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
+            self.state = BotState.IDLE
+            return
 
         # === GENERATION (Slow Model) ===
         self.state = BotState.GENERATING
@@ -184,11 +192,13 @@ class SalesBotOrchestrator:
                 dm_history="",
                 group_context=group_context,
                 funnel_stage=funnel_stage,
+                persona_name=self.contract.persona_name if self.contract else "",
             )
         else:
             response = await self.generator.generate_group_response(
                 message_text=msg.text,
                 chat_context=chat_context,
+                persona_name=self.contract.persona_name if self.contract else "",
             )
 
         if not response or not response.text:

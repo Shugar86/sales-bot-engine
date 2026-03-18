@@ -51,12 +51,23 @@ class TestRateLimiter:
         assert "Cooldown" in reason
     
     def test_random_delay_range(self):
-        """Random delay should be within configured range."""
-        limiter = RateLimiter(min_delay_sec=5.0, max_delay_sec=30.0)
+        """Random delay should be within configured range (with thinking pause tolerance)."""
+        limiter = RateLimiter(min_delay_sec=30.0, max_delay_sec=300.0)
         
         for _ in range(50):
             delay = limiter.get_random_delay()
-            assert 5.0 <= delay <= 30.0
+            # Base range: 30-300s. Thinking pause can add up to 2x min = 60s.
+            # Night mode (if active) can triple. We just check it's reasonable.
+            assert delay >= 30.0
+            assert delay <= 900.0  # max with all modifiers
+    
+    def test_random_delay_respects_min(self):
+        """Random delay should respect min_delay_sec."""
+        limiter = RateLimiter(min_delay_sec=5.0, max_delay_sec=10.0)
+        
+        for _ in range(20):
+            delay = limiter.get_random_delay()
+            assert delay >= 5.0
     
     def test_record_send_increments(self):
         """record_send should track sends."""

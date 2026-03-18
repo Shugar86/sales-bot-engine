@@ -8,8 +8,8 @@ from src.memory.user_memory import UserMemoryStore
 
 @pytest.fixture
 def store(tmp_path):
-    """Store с временной директорией"""
-    return UserMemoryStore(memory_dir=str(tmp_path / "memory"))
+    """Store с временной директорией — kormoved persona"""
+    return UserMemoryStore(memory_dir=str(tmp_path / "memory"), persona_name="kormoved")
 
 
 class TestUserMemoryCRUD:
@@ -173,11 +173,11 @@ class TestPersistence:
     def test_data_survives_reload(self, tmp_path):
         mem_dir = str(tmp_path / "memory")
         
-        store1 = UserMemoryStore(memory_dir=mem_dir)
+        store1 = UserMemoryStore(memory_dir=mem_dir, persona_name="kormoved")
         store1.record_group_message("123", "u", "U", "456", "Chat", "Овчарка")
         
         # Новый экземпляр — должен подхватить данные
-        store2 = UserMemoryStore(memory_dir=mem_dir)
+        store2 = UserMemoryStore(memory_dir=mem_dir, persona_name="kormoved")
         data = store2._load("123")
         
         assert data["dog_breed"] == "Немецкая овчарка"
@@ -190,7 +190,7 @@ class TestPersistence:
         with open(os.path.join(mem_dir, "999.json"), "w") as f:
             f.write("{broken json")
         
-        store = UserMemoryStore(memory_dir=mem_dir)
+        store = UserMemoryStore(memory_dir=mem_dir, persona_name="kormoved")
         data = store._load("999")  # Не должен упасть
         
         # Должен создать нового юзера

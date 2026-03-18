@@ -1,26 +1,163 @@
 """
 User Memory Store — персистентная память о пользователях
 JSON файлы, один на юзера. Переживает рестарт.
+
+Entity extraction is pluggable per persona via _extract_entities().
 """
 
 import json
 import os
 import re
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Optional, Callable
 
 from ..utils.logger import get_logger
 
 logger = get_logger("memory")
 
 
+# === ENTITY EXTRACTORS (pluggable per persona) ===
+
+def _extract_dog_info(data: dict, text: str):
+    """Extract dog-related info (for kormoved persona)."""
+    text_lower = text.lower()
+    
+    breeds = {
+        "овчарка": "Немецкая овчарка",
+        "малинуа": "Бельгийская овчарка (Малинуа)",
+        "лабрадор": "Лабрадор",
+        "хаски": "Хаски",
+        "ротвейлер": "Ротвейлер",
+        "корги": "Корги",
+        "такса": "Такса",
+        "бигль": "Бигль",
+        "спаниэль": "Спаниэль",
+        "доберман": "Доберман",
+        "джек рассел": "Джек Рассел",
+        "шпиц": "Шпиц",
+        "чихуахуа": "Чихуахуа",
+        "пудель": "Пудель",
+        "мопс": "Мопс",
+        "алабай": "Алабай",
+        "кавказец": "Кавказская овчарка",
+        "стафф": " Стаффордширский терьер",
+        "питбуль": "Питбуль",
+        "боксёр": "Боксёр",
+    }
+    for keyword, breed in breeds.items():
+        if keyword in text_lower and not data.get("dog_breed"):
+            data["dog_breed"] = breed
+    
+    problems = {
+        "аллергия": "аллергия",
+        "чешется": "зуд/чесотка",
+        "понос": "проблемы с ЖКТ",
+        "рвота": "рвота",
+        "похудел": "потеря веса",
+        "отказывается есть": "отказ от еды",
+        "хромает": "хромота",
+        "красные уши": "воспаление ушей",
+        "слезятся глаза": "слезоточивость",
+        "выпадает шерсть": "выпадение шерсти",
+        "зубной камень": "зубной камень",
+        "запах изо рта": "запах изо рта",
+        "вздутие": "вздутие живота",
+    }
+    for keyword, problem in problems.items():
+        if keyword in text_lower and problem not in data.get("dog_problems", []):
+            data.setdefault("dog_problems", []).append(problem)
+    
+    age_match = re.search(r'(\d+)\s*(год[а]?|лет|месяц[а]?)', text_lower)
+    if age_match and not data.get("dog_age"):
+        data["dog_age"] = age_match.group(0)
+    
+    name_match = re.search(r'(?:зовут|кличка|имя)\s+(\w+)', text_lower)
+    if name_match and not data.get("dog_name"):
+        data["dog_name"] = name_match.group(1).capitalize()
+
+
+def _extract_fitness_info(data: dict, text: str):
+    """Extract fitness-related info (for fitness persona)."""
+    text_lower = text.lower()
+    
+    goals = {
+        "похудеть": "снижение веса",
+        "набрать массу": "набор массы",
+        "рельеф": "рельеф",
+        "выносливость": "выносливость",
+        "гибкость": "гибкость",
+        "сила": "сила",
+    }
+    for keyword, goal in goals.items():
+        if keyword in text_lower and goal not in data.get("interests", []):
+            data.setdefault("interests", []).append(goal)
+    
+    problems = {
+        "колен": "проблемы с коленями",
+        "спин": "проблемы со спиной",
+        "плеч": "проблемы с плечами",
+        "травм": "травма",
+        "болит": "болевые ощущения",
+    }
+    for keyword, problem in problems.items():
+        if keyword in text_lower and problem not in data.get("health_issues", []):
+            data.setdefault("health_issues", []).append(problem)
+
+
+def _extract_generic_info(data: dict, text: str):
+    """Generic entity extraction — captures names, interests, concerns."""
+    text_lower = text.lower()
+    
+    # Extract any mentioned interests/topics
+    topic_keywords = {
+        "здоровь": "здоровье",
+        "спорт": "спорт",
+        "работ": "работа",
+        "семь": "семья",
+        "деньг": "финансы",
+        "отпуск": "отдых",
+    }
+    for keyword, topic in topic_keywords.items():
+        if keyword in text_lower and topic not in data.get("interests", []):
+            data.setdefault("interests", []).append(topic)
+
+
+# Registry of persona-specific extractors
+ENTITY_EXTRACTORS = {
+    "kormoved": _extract_dog_info,
+    "dog_food": _extract_dog_info,
+    "андрей": _extract_dog_info,
+    "fitness": _extract_fitness_info,
+    "fitbro": _extract_fitness_info,
+    # Default: generic extractor
+}
+
+
 class UserMemoryStore:
     """Хранилище памяти о пользователях"""
     
-    def __init__(self, memory_dir: str = "data/memory"):
+    def __init__(self, memory_dir: str = "data/memory", persona_name: str = ""):
         self.memory_dir = memory_dir
+        self.persona_name = persona_name.lower() if persona_name else ""
         os.makedirs(memory_dir, exist_ok=True)
         self._cache: dict = {}  # user_id -> data
+        self._extractor = self._get_extractor()
+    
+    def _get_extractor(self) -> Callable:
+        """Get the right entity extractor for this persona."""
+        for key, extractor in ENTITY_EXTRACTORS.items():
+            if key in self.persona_name:
+                logger.debug(f"Using {key} entity extractor for persona '{self.persona_name}'")
+                return extractor
+        logger.debug(f"Using generic entity extractor for persona '{self.persona_name}'")
+        return _extract_generic_info
+    
+    def _extract_entities(self, data: dict, text: str):
+        """Extract entities using persona-appropriate extractor."""
+        try:
+            self._extractor(data, text)
+        except Exception as e:
+            logger.warning(f"Entity extraction error: {e}")
     
     def _path(self, user_id: str) -> str:
         return os.path.join(self.memory_dir, f"{user_id}.json")
@@ -49,8 +186,8 @@ class UserMemoryStore:
             "dog_age": None,
             "dog_name": None,
             "dog_problems": [],
-            "first_seen": datetime.utcnow().isoformat() + "Z",
-            "last_seen": datetime.utcnow().isoformat() + "Z",
+            "first_seen": datetime.now(timezone.utc).isoformat() + "Z",
+            "last_seen": datetime.now(timezone.utc).isoformat() + "Z",
             "total_interactions": 0,
             "group_chats": [],
             "group_messages": [],
@@ -86,7 +223,7 @@ class UserMemoryStore:
         
         data["username"] = username or data.get("username", "")
         data["display_name"] = display_name or data.get("display_name", "")
-        data["last_seen"] = datetime.utcnow().isoformat() + "Z"
+        data["last_seen"] = datetime.now(timezone.utc).isoformat() + "Z"
         data["total_interactions"] = data.get("total_interactions", 0) + 1
         
         if chat_id not in data.get("group_chats", []):
@@ -97,13 +234,13 @@ class UserMemoryStore:
             "chat_id": chat_id,
             "chat_title": chat_title,
             "text": message[:500],
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
         })
         # Обрезаем до 10
         data["group_messages"] = data["group_messages"][-10:]
         
-        # Авто-извлечение информации о собаке
-        self._extract_dog_info(data, message)
+        # Авто-извлечение информации (persona-specific)
+        self._extract_entities(data, message)
         
         self._save(user_id)
     
@@ -121,7 +258,7 @@ class UserMemoryStore:
         
         data["username"] = username or data.get("username", "")
         data["display_name"] = display_name or data.get("display_name", "")
-        data["last_seen"] = datetime.utcnow().isoformat() + "Z"
+        data["last_seen"] = datetime.now(timezone.utc).isoformat() + "Z"
         data["has_dm"] = True
         data["total_interactions"] = data.get("total_interactions", 0) + 1
         
@@ -138,14 +275,14 @@ class UserMemoryStore:
         summary = data.get("dm_history_summary", "")
         data["dm_history_summary"] = summary + f"\nUser: {message[:100]}\nBot: {response[:100]}\n"
         
-        self._extract_dog_info(data, message)
+        self._extract_entities(data, message)
         self._save(user_id)
     
     def add_note(self, user_id: str, note: str):
         """Добавить заметку"""
         data = self._load(user_id)
         data.setdefault("notes", []).append(
-            f"{datetime.utcnow().strftime('%Y-%m-%d')}: {note}"
+            f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}: {note}"
         )
         data["notes"] = data["notes"][-20:]  # максимум 20 заметок
         self._save(user_id)
@@ -229,54 +366,6 @@ class UserMemoryStore:
         """Получить стадию воронки"""
         data = self._load(user_id)
         return data.get("funnel_stage", "unknown")
-    
-    def _extract_dog_info(self, data: dict, text: str):
-        """Авто-извлечение информации о собаке"""
-        text_lower = text.lower()
-        
-        # Породы
-        breeds = {
-            "овчарка": "Немецкая овчарка",
-            "малинуа": "Бельгийская овчарка (Малинуа)",
-            "лабрадор": "Лабрадор",
-            "хаски": "Хаски",
-            "ротвейлер": "Ротвейлер",
-            "корги": "Корги",
-            "такса": "Такса",
-            "бигль": "Бигль",
-            "спаниэль": "Спаниэль",
-            "доберман": "Доберман",
-        }
-        for keyword, breed in breeds.items():
-            if keyword in text_lower and not data.get("dog_breed"):
-                data["dog_breed"] = breed
-        
-        # Проблемы
-        problems = {
-            "аллергия": "аллергия",
-            "чешется": "зуд/чесотка",
-            "понос": "проблемы с ЖКТ",
-            "рвота": "рвота",
-            "похудел": "потеря веса",
-            "отказывается есть": "отказ от еды",
-            "хромает": "хромота",
-            "красные уши": "воспаление ушей",
-            "слезятся глаза": "слезоточивость",
-            "выпадает шерсть": "выпадение шерсти",
-        }
-        for keyword, problem in problems.items():
-            if keyword in text_lower and problem not in data.get("dog_problems", []):
-                data.setdefault("dog_problems", []).append(problem)
-        
-        # Возраст
-        age_match = re.search(r'(\d+)\s*(год[а]?|лет|месяц[а]?)', text_lower)
-        if age_match and not data.get("dog_age"):
-            data["dog_age"] = age_match.group(0)
-        
-        # Кличка (простой паттерн: "зовут X", "кличка X")
-        name_match = re.search(r'(?:зовут|кличка|имя)\s+(\w+)', text_lower)
-        if name_match and not data.get("dog_name"):
-            data["dog_name"] = name_match.group(1).capitalize()
     
     def get_all_users(self, stage: str = None) -> list[dict]:
         """Получить всех юзеров (опционально фильтр по воронке)"""

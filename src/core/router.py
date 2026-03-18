@@ -1,9 +1,12 @@
 """
 Fast Model Router — решает: отвечать / не отвечать / продажный триггер
 Использует дешёвую быструю модель (Gemini Flash)
+
+Дополнительно: пред-фильтрация без LLM (отстань, бот, спам, ссылки).
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -20,6 +23,7 @@ class Decision(Enum):
     ENGAGE = "engage"           # Завязать диалог (мягко)
     SALES_DM = "sales_dm"      # Если написал в ЛС — продавать
     WAIT = "wait"              # Подождать, пока контекст неясен
+    DISENGAGE = "disengage"     # Отступить (человек просит отстать)
 
 
 @dataclass
@@ -31,20 +35,69 @@ class RouteResult:
     keywords_matched: list = field(default_factory=list)
 
 
-SYSTEM_PROMPT = """Ты — фильтр сообщений в чате. Решаешь, как реагировать.
+# === ПРЕД-ФИЛЬТРЫ (без LLM, мгновенно) ===
 
-Правила:
-1. RESPOND — если релевантно контракту (продукт/темы персонажа)
-2. ENGAGE — если можно мягко вступить в разговор
-3. IGNORE — если не по теме, спам, или уже ответили
-4. WAIT — если контекст неясен
+# Просит отстать — сразу DISENGAGE
+GO_AWAY_PATTERNS = [
+    "отстань", "отвали", "не пиши", "хватит", "прекрати",
+    "заткнись", "замолчи", "уйди", "не надо", "стоп",
+    "я не просил", "не интересно", "не хочу общаться",
+    "перестань", "хватит уже", "оставь меня", "не пиши мне",
+]
+
+# Спрашивает про бота — RESPOND (генератор ответит)
+BOT_QUESTION_PATTERNS = [
+    "ты бот", "ты ai", "ты искусственный", "ты программа",
+    "ты нейросеть", "ты chatgpt", "ты gpt", "ты робот",
+    "бот ты", "аи ты", "это бот", "автоматический ответ",
+    "машина ты", "нейросетка",
+]
+
+# Явный спам / реклама — IGNORE
+SPAM_PATTERNS = [
+    r"https?://t\.me/",      # Ссылки на каналы
+    r"https?://bit\.ly/",
+    r"заработ[окай]",         # "заработок", "заработай"
+    r"подпишись.*канал",
+    r"переходи.*ссылк",
+    r"бесплатн.*курс",
+    r"крипт[оа].*трейд",
+    r"\+\d{10,}",             # Длинные номера телефонов (спам)
+]
+
+# Сообщения-реакции (не несут смысла) — IGNORE
+TRIVIAL_PATTERNS = [
+    "лол", "кек", "😂", "👍", "😄", "🔥", "❤️",
+    "+1", "согласен", "поддерживаю", "да", "нет",
+    "ок", "окей", "окк", "ага", "угу", "ну да",
+    "хаха", "ахах", "))))", ")))",
+]
+
+
+SYSTEM_PROMPT = """Ты — фильтр сообщений в чате. Решаешь, как реагировать на сообщение от имени персонажа-эксперта.
+
+Персонаж — РЕАЛЬНЫЙ ЧЕЛОВЕК в чате. Он эксперт своей ниши, общается как живой.
+
+Правила принятия решений:
+1. RESPOND — если сообщение релевантно темам персонажа (продукты, ниша, смежные вопросы)
+2. ENGAGE — если можно вступить в разговор естественно (близкая тема, общий интерес)
+3. IGNORE — если: не по теме, кто-то уже ответил, спам, эмоциональные сообщения без смысла
+4. WAIT — если контекст неясен, нужно больше информации
+5. DISENGAGE — если человек явно не хочет общаться
+
+ВАЖНО:
+- Если кто-то уже дал хороший ответ по теме — IGNORE
+- Если сообщение "👍" или "лол" — IGNORE
+- Если обсуждают политику/спорт и это не ниша персонажа — IGNORE
+- Если вопрос на грани ниши — ENGAGE (можно помочь смежно)
+- Если вопрос прямо по продукту — RESPOND с высокой уверенностью
 
 Отвечай ТОЛЬКО JSON:
 {"decision": "...", "confidence": 0.0-1.0, "reason": "...", "topic": "...", "keywords": [...]}"""
 
 
 class MessageRouter:
-    """Fast model роутер для принятия решений"""
+    """Fast model роутер + пред-фильтры без LLM"""
     
     def __init__(self, llm_client: LLMClient, model: str, contract: dict):
         self.llm = llm_client
@@ -82,6 +135,70 @@ class MessageRouter:
         
         return "\n".join(parts)
     
+    def _prefilter(self, message_text: str) -> Optional[RouteResult]:
+        """
+        Пред-фильтрация без LLM. Возвращает решение или None (нужен LLM).
+        Работает мгновенно, не тратит токены.
+        """
+        text = message_text.lower().strip()
+        
+        # Пустые сообщения
+        if not text:
+            return RouteResult(
+                decision=Decision.IGNORE,
+                confidence=1.0,
+                reason="Пустое сообщение",
+            )
+        
+        # Слишком короткие тривиальные реакции
+        if len(text) <= 5 and text in [t.lower() for t in TRIVIAL_PATTERNS]:
+            return RouteResult(
+                decision=Decision.IGNORE,
+                confidence=0.95,
+                reason="Тривиальная реакция",
+            )
+        
+        # "Отстань" — сразу DISENGAGE
+        for pattern in GO_AWAY_PATTERNS:
+            if pattern in text:
+                return RouteResult(
+                    decision=Decision.DISENGAGE,
+                    confidence=1.0,
+                    reason="Пользователь просит отстать",
+                    topic="disengage",
+                )
+        
+        # Спам-паттерны
+        for pattern in SPAM_PATTERNS:
+            if re.search(pattern, text):
+                return RouteResult(
+                    decision=Decision.IGNORE,
+                    confidence=0.95,
+                    reason=f"Спам-паттерн: {pattern}",
+                    topic="spam",
+                )
+        
+        # Только ссылки без текста
+        if re.match(r'^https?://\S+$', text):
+            return RouteResult(
+                decision=Decision.IGNORE,
+                confidence=0.9,
+                reason="Голая ссылка",
+            )
+        
+        # "Ты бот?" — RESPOND (генератор обработает)
+        for pattern in BOT_QUESTION_PATTERNS:
+            if pattern in text:
+                return RouteResult(
+                    decision=Decision.RESPOND,
+                    confidence=1.0,
+                    reason="Вопрос 'ты бот?' — отвечаем как человек",
+                    topic="bot_question",
+                )
+        
+        # Всё остальное — нужен LLM
+        return None
+    
     async def route(
         self,
         message_text: str,
@@ -108,15 +225,12 @@ class MessageRouter:
                 topic="dm",
             )
         
-        # Пустые сообщения игнорируем
-        if not message_text or not message_text.strip():
-            return RouteResult(
-                decision=Decision.IGNORE,
-                confidence=1.0,
-                reason="Empty message",
-            )
+        # Пред-фильтр (без LLM)
+        prefilter_result = self._prefilter(message_text)
+        if prefilter_result is not None:
+            return prefilter_result
         
-        # Формируем промпт
+        # LLM-роутинг
         user_prompt = f"""Персонаж:
 {self._persona_summary}
 
@@ -132,12 +246,13 @@ class MessageRouter:
             model=self.model,
             prompt=user_prompt,
             system=SYSTEM_PROMPT,
-            temperature=0.3,  # Низкая температура для стабильных решений
+            temperature=0.3,
             max_tokens=256,
         )
         
         if not response.success:
             logger.error(f"Router call failed: {response.error}")
+            # При ошибке LLM — IGNORE (безопасный fallback)
             return RouteResult(
                 decision=Decision.IGNORE,
                 confidence=0.0,
@@ -149,7 +264,6 @@ class MessageRouter:
     def _parse_response(self, text: str) -> RouteResult:
         """Парсинг ответа модели"""
         try:
-            # Вырезаем JSON из markdown блоков
             text = text.strip()
             if text.startswith("```"):
                 text = "\n".join(text.split("\n")[1:])
