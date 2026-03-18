@@ -23,6 +23,7 @@ from ..monitors.vk_monitor import VKMonitorAsync, VKMessage
 from ..monitors.anti_spam import RateLimiter
 from ..memory.user_memory import UserMemoryStore
 from ..responders.text_humanizer import humanize_text
+from ..responders.chat_vibe import detect_chat_vibe, VibeAnalysis
 from ..utils.dedup import DeduplicationStore
 from ..utils.llm_client import LLMClient
 from ..utils.logger import get_logger
@@ -300,9 +301,14 @@ class SalesBotOrchestratorV2:
                     funnel_stage=funnel_stage,
                 )
             else:
+                # Detect chat vibe from recent context for vibe matching
+                recent_msgs = runtime.dedup.get_recent_texts(msg.chat_id, limit=10)
+                chat_vibe = detect_chat_vibe(recent_msgs) if recent_msgs else None
+                
                 response = await runtime.generator.generate_group_response(
                     message_text=msg.text,
                     chat_context=chat_context,
+                    chat_vibe=chat_vibe,
                 )
         except Exception as e:
             logger.error(f"[{runtime.config.name}] Generation error: {e}")

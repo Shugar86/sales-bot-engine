@@ -14,6 +14,7 @@ from typing import Optional
 
 from ..utils.llm_client import LLMClient
 from ..utils.logger import get_logger
+from .chat_vibe import ChatVibe, VibeAnalysis
 
 logger = get_logger("generator")
 
@@ -298,6 +299,7 @@ class ResponseGenerator:
         message_text: str,
         chat_context: str = "",
         persona_name: str = "",
+        chat_vibe: Optional[VibeAnalysis] = None,
     ) -> Optional[GeneratedResponse]:
         """
         Сгенерить ответ в группу.
@@ -318,6 +320,11 @@ class ResponseGenerator:
             speaking_style=self._get_speaking_style(),
             response_examples=self._get_response_examples_text(),
         )
+        
+        # Inject chat vibe into system prompt
+        if chat_vibe:
+            vibe_modifier = chat_vibe.to_prompt_modifier()
+            system += f"\n\n=== ВАЙБ ЧАТА ===\n{vibe_modifier}"
         
         user_prompt = f"""Сообщение в чате:
 "{message_text}"

@@ -148,6 +148,11 @@ class DeduplicationStore:
         
         return False
     
+    def get_recent_texts(self, chat_id: str, limit: int = 10) -> list[str]:
+        """Get recent response texts for a chat (for vibe analysis)."""
+        responses = self._recent_responses.get(chat_id, [])
+        return responses[-limit:] if responses else []
+    
     def get_stats(self) -> dict:
         """Статистика"""
         return {

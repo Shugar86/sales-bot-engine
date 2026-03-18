@@ -283,3 +283,37 @@ Key findings from Turing test game analysis:
 - 20 new Turing edge case tests
 
 ### Final Status: 131/131 tests passing ✅
+
+---
+
+# Night Session Log — SECOND SESSION (Cycle 6+)
+## Started: 2026-03-18 22:25 GMT+1
+
+---
+
+## CYCLE 6: ARCHITECT REVIEW (Response Quality)
+
+### Gaps Found:
+
+1. **Chat context NOT injected into group generator** — `_handle_message` gets `chat_context` from `get_recent_messages()` but doesn't pass it as `chat_context` param. Wait, it does pass it. But `get_recent_messages()` reads ALL user files every time — O(n*m). Need a better approach.
+
+2. **No "vibe matching"** — Generator doesn't know the chat's current energy level. In a drunk chat, the bot should respond with drunk energy. In a serious chat, be serious. Currently it picks randomly.
+
+3. **Fitness YAML missing group_context_examples** — Only kormoved has them (alcohol recovery, music chat examples). Fitness needs gym culture, motivational chat examples.
+
+4. **smm_blogger YAML missing group_context_examples** — Missing business chat, motivational, social examples.
+
+5. **kormoved has only 6 response_examples** — Need 10+ for comprehensive coverage (Turing test requirement).
+
+6. **Persona key mismatch** — YAML uses `triggers.respond_when` but persona_manager reads the same key. Actually looking at code, load_persona() reads `persona_data.get("triggers", {}).get("respond_when", [])` — this IS correct. No mismatch.
+
+7. **No conversation threading awareness** — Bot doesn't track which messages it already replied to in a conversation thread. Could double-respond to same topic.
+
+8. **Generator doesn't receive persona_name in generate_group_response** — It uses the persona name from contract, but the `persona_name` param defaults to empty string.
+
+### Priority for Cycle 6-7:
+- Add chat energy/vibe detection
+- Add group_context_examples to fitness and smm_blogger
+- Add more response_examples to all personas
+- Pass chat activity info to generator for vibe matching
+
