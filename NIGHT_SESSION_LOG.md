@@ -354,3 +354,14 @@ Key findings from Turing test game analysis:
 - Track products/recommendations already given
 - Add "last recommendation" to user memory
 
+
+## CYCLE 9: EDGE CASES
+
+### Issues Found:
+1. **No bot-to-bot detection** — If two bots meet in same chat, infinite loop
+2. **Trivial message handling is basic** — "." and "👍" are handled but edge cases like "++", "---", "???" aren't
+3. **No voice message handling** — Generator doesn't handle voice message metadata
+4. **Admin warning not handled** — If admin warns bot, should reduce activity
+5. **Argument de-escalation not tested** — Generator prompt says "de-escalate" but no tests
+6. **No "typing indicator" before response** — Orchestrator has typing_simulation config but doesn't use it
+

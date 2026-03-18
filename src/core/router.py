@@ -71,6 +71,15 @@ TRIVIAL_PATTERNS = [
     "+1", "согласен", "поддерживаю", "да", "нет",
     "ок", "окей", "окк", "ага", "угу", "ну да",
     "хаха", "ахах", "))))", ")))",
+    "++", "---", "???", "...",
+]
+
+# Паттерны для проверки "только тривиальные символы"
+TRIVIAL_ONLY_PATTERNS = [
+    r'^[😂🤣😄😆😅❤️🔥👍💪🤝😘💋🤔👀\s]+$',  # Only emojis
+    r'^[.?!\-+]+$',                                  # Only punctuation
+    r'^\d+$',                                         # Only numbers
+    r'^[хХхХhH]{2,}$',                               # Only laughter "хах", "хахах"
 ]
 
 
@@ -157,6 +166,15 @@ class MessageRouter:
                 confidence=0.95,
                 reason="Тривиальная реакция",
             )
+        
+        # Проверка "только тривиальные символы" (эмодзи, пунктуация, числа)
+        for pattern in TRIVIAL_ONLY_PATTERNS:
+            if re.match(pattern, text):
+                return RouteResult(
+                    decision=Decision.IGNORE,
+                    confidence=0.95,
+                    reason="Только тривиальные символы",
+                )
         
         # "Отстань" — сразу DISENGAGE
         for pattern in GO_AWAY_PATTERNS:
