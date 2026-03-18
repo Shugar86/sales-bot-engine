@@ -196,6 +196,8 @@ class UserMemoryStore:
             "funnel_stage": "unknown",
             "products_mentioned": [],
             "notes": [],
+            "topics_discussed": [],
+            "recommendations": [],
         }
         self._cache[user_id] = data
         return data
@@ -287,6 +289,21 @@ class UserMemoryStore:
         data["notes"] = data["notes"][-20:]  # максимум 20 заметок
         self._save(user_id)
     
+    def record_recommendation(self, user_id: str, recommendation: str):
+        """Record a product recommendation given to this user."""
+        data = self._load(user_id)
+        recs = data.setdefault("recommendations", [])
+        # Don't add exact duplicates
+        if recommendation not in recs:
+            recs.append(recommendation)
+            recs[:] = recs[-10:]  # Keep last 10
+            self._save(user_id)
+    
+    def get_recommendations(self, user_id: str) -> list[str]:
+        """Get list of recommendations already given to user."""
+        data = self._load(user_id)
+        return data.get("recommendations", [])
+    
     def get_user_context(self, user_id: str) -> str:
         """Получить контекст юзера для промпта"""
         data = self._load(user_id)
@@ -298,6 +315,11 @@ class UserMemoryStore:
         if data.get("username"):
             parts.append(f"@{data['username']}")
         
+        # Interaction count (for "is this first contact?" awareness)
+        interactions = data.get("total_interactions", 0)
+        if interactions > 1:
+            parts.append(f"Взаимодействий: {interactions}")
+        
         if data.get("dog_breed"):
             parts.append(f"Собака: {data['dog_breed']}")
         if data.get("dog_age"):
@@ -306,6 +328,16 @@ class UserMemoryStore:
             parts.append(f"Кличка: {data['dog_name']}")
         if data.get("dog_problems"):
             parts.append(f"Проблемы: {', '.join(data['dog_problems'])}")
+        
+        # Topics discussed
+        topics = data.get("topics_discussed", [])
+        if topics:
+            parts.append(f"Темы: {', '.join(topics[-5:])}")
+        
+        # Recommendations already given (avoid repetition)
+        recs = data.get("recommendations", [])
+        if recs:
+            parts.append(f"Уже рекомендовал: {'; '.join(recs[-3:])}")
         
         if data.get("notes"):
             parts.append(f"Заметки: {'; '.join(data['notes'][-3:])}")

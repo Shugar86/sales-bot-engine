@@ -336,3 +336,21 @@ Key findings from Turing test game analysis:
 - Add activity burst detection
 - Add time-of-day timezone support
 
+
+## CYCLE 8: MEMORY & CONTEXT
+
+### Issues Found:
+1. **No per-user conversation history** — UserMemory stores group_messages but not full DM conversation context
+2. **Funnel stage doesn't auto-progress properly** — analyze_funnel_signals exists but is never called in orchestrator
+3. **User context in generator is basic** — Only shows name, dog breed, notes. Should show full interaction history
+4. **No "remember this about user" from generator** — Generator returns `remember` list but it's only added as notes, not structured data
+5. **Same sales pitch repeated** — No tracking of what was already recommended
+6. **No "previous recommendation" memory** — Bot should remember "I recommended X last time"
+
+### Implementation:
+- Add `conversation_topics` tracking per user
+- Auto-call funnel signals in orchestrator
+- Rich user context with interaction count and history
+- Track products/recommendations already given
+- Add "last recommendation" to user memory
+
