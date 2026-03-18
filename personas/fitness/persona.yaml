@@ -7,7 +7,7 @@ persona:
   session_name: "fitness"
   api_id: 0              # получить на https://my.telegram.org
   api_hash: ""           # получить на https://my.telegram.org
-  phone: "+79001234567"  # номер твинка
+  phone: "+79094014463"  # FitBro твинк
   
   # Кто он
   personality: |
