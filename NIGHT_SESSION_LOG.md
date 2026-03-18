@@ -162,13 +162,110 @@ Key findings from Turing test game analysis:
 
 ## CYCLE 2: BALDY RESEARCH
 
-(search to follow)
+### Key insight from research (Mashable article):
+"A determined and thoughtful interrogator could almost always unmask" modern AI. The key giveaways:
+1. Perfect formatting
+2. Always helpful, never dismissive
+3. No personal opinions or preferences
+4. Response length uniformity
+5. Memory inconsistencies across messages
+
+### Implementation applied:
+- Response length variance guidelines in prompts (short/medium/long)
+- Opinion injection ("у тебя есть мнение, не будь нейтральным")
+- Competitor knowledge for natural competitor discussion
 
 ---
 
 ## CYCLE 2: CODER FIX
 
-(implementation to follow)
+### Changes Made:
+
+**1. Generator (generator.py)**
+- Added competitor_knowledge to speaking_style prompt
+- Added response length variance guidelines to GROUP_SYSTEM
+- Short: 1-5 words (agreeing, reacting)
+- Medium: 1-2 sentences (advice, opinion)
+- Long: 3+ sentences (ONLY on direct questions)
+
+**2. Memory (user_memory.py)**
+- Added analyze_funnel_signals() method
+- Buying signals: купить, заказать, скинь ссылку
+- Interest signals: подробнее, расскажи, а как, а почему
+- Objection signals: дорого, подумаю, не уверен
+- Disengagement signals: не надо, отстань, не интересно
+
+**3. Persona Manager (persona_manager.py)**
+- Added competitor_knowledge field to PersonaConfig
+- Parser handles competitor_knowledge from YAML
+
+**4. Orchestrator (orchestrator_v2.py)**
+- Pass competitor_knowledge through contract dict
+
+**5. Persona YAML (kormoved)**
+- Added competitor_knowledge section (Royal Canin, Hills, Acana, Purina, Monge, Brit)
+- Each with honest assessment (not bashing, but honest about pros/cons)
+
+**6. Tests Added**
+- test_competitor_knowledge.py: Loading, contract integration, prompt injection
+- test_funnel_signals.py: All signal types, stage transitions
+
+### Tests: 180 → 190 (all passing)
+
+### Git commit: be50632 "Night session cycle 4-5: Competitor knowledge, funnel signals, prompt improvements"
+
+---
+
+## FINAL SESSION SUMMARY
+
+### Total Changes (Cycles 1-5):
+
+**Files Modified:**
+- src/monitors/anti_spam.py — Human delays, leave-on-read, emoji reactions, time-awareness
+- src/memory/user_memory.py — Pluggable extractors, datetime fix, funnel signals
+- src/core/persona_manager.py — ResponseExample, competitor_knowledge
+- src/core/orchestrator_v2.py — Leave-on-read, emoji reactions, humanizer, dedup
+- src/responders/generator.py — Response examples, competitor knowledge, length variance
+- src/utils/dedup.py — Chat activity tracking, response repetition detection
+- personas/kormoved/persona.yaml — Response examples, competitor knowledge, delays
+- personas/fitness/persona.yaml — Response examples, delays
+- personas/smm_blogger/persona.yaml — Response examples, delays
+
+**Files Created:**
+- src/responders/text_humanizer.py — Typo injection, lowercase starts, casual mode
+- tests/test_anti_detect.py — Leave-on-read, emoji, time-awareness
+- tests/test_entity_extraction.py — Entity extractors, persona mapping
+- tests/test_text_humanizer.py — Humanizer tests
+- tests/test_dedup.py — Activity tracking, repetition detection
+- tests/test_competitor_knowledge.py — Competitor integration
+- tests/test_funnel_signals.py — Funnel auto-progression
+
+**Test Count:** 111 → 190 (all passing)
+
+### Turing Test Improvements Summary:
+
+| Feature | Before | After |
+|---------|--------|-------|
+| Response delays | 180-900s | 30-300s (human-like) |
+| Leave on read | Never | 35% probability |
+| Emoji reactions | Never | 15% probability |
+| Night mode | None | 3x slower at night |
+| Typos/casual | None | 5% typo rate, 15% lowercase |
+| Entity extraction | Dog-only | Per-persona pluggable |
+| Response examples | None | Good/bad pairs per persona |
+| Competitor talk | "Не комментируем" | Honest expert assessment |
+| Response length | Uniform | Short/medium/long variance |
+| Repetition detection | None | Word overlap similarity |
+| Funnel progression | Manual | Signal-based auto-progression |
+| Chat activity | None | Per-chat tracking |
+
+### Next Steps for Future Sessions:
+1. Add .gitignore for __pycache__ and *.pyc
+2. Conversation threading (track if bot already replied in a thread)
+3. Multi-turn DM context persistence
+4. Group dynamics (agree with others, share stories)
+5. Voice message support
+6. Competitor knowledge for fitness/SMM personas
 
 ## CYCLE 1: COMPLETED
 
