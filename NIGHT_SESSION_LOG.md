@@ -80,3 +80,20 @@ Key findings from Turing test game analysis:
 ## CYCLE 1: CODER FIX
 
 (implementation to be documented)
+
+## CYCLE 1: COMPLETED
+
+### Test Fixes
+- Fixed test_memory.py: persona_name="kormoved" for dog extractor
+- Fixed test_persona_manager.py: default min_delay is 30, not 120
+- Fixed test_anti_spam.py: tolerance for float comparisons
+
+### Turing Test Improvements (Phase 7)
+- Generator: human-like prompts, go-away detection, bot denial, LLM fallbacks
+- Router: pre-filters (spam, trivial, go-away, bot questions, bare links)  
+- DISENGAGE decision for "отстань" scenarios
+- Orchestrator v1+v2: handle DISENGAGE
+- Userbot: bot-to-bot detection
+- 20 new Turing edge case tests
+
+### Final Status: 131/131 tests passing ✅
