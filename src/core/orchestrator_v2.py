@@ -20,7 +20,7 @@ from ..responders.generator import ResponseGenerator, GeneratedResponse
 from ..monitors.telegram_userbot import TelegramUserbot, UserbotMessage
 from ..monitors.telegram_monitor import TelegramMonitor, TelegramMessage
 from ..monitors.vk_monitor import VKMonitorAsync, VKMessage
-from ..monitors.anti_spam import RateLimiter
+from ..monitors.anti_spam import RateLimiter, TypingSpeedCalculator
 from ..memory.user_memory import UserMemoryStore
 from ..responders.text_humanizer import humanize_text
 from ..responders.chat_vibe import detect_chat_vibe, VibeAnalysis
@@ -291,14 +291,24 @@ class SalesBotOrchestratorV2:
             if msg.is_dm:
                 user_memory = runtime.memory.get_user_context(msg.user_id)
                 group_context = runtime.memory.get_group_context_for_user(msg.user_id)
-                funnel_stage = runtime.memory.get_funnel_stage(msg.user_id)
+                
+                # Auto-analyze funnel signals
+                funnel_stage = runtime.memory.analyze_funnel_signals(msg.user_id, msg.text)
+                # Use the more advanced stage if funnel analysis detected something
+                current_stage = runtime.memory.get_funnel_stage(msg.user_id)
+                effective_stage = funnel_stage if funnel_stage != current_stage else current_stage
+                
+                # Include previous recommendations to avoid repetition
+                prev_recs = runtime.memory.get_recommendations(msg.user_id)
+                if prev_recs:
+                    user_memory += f"\nУже рекомендовал: {'; '.join(prev_recs[-3:])}"
                 
                 response = await runtime.generator.generate_dm_response(
                     message_text=msg.text,
                     user_memory=user_memory,
                     dm_history="",
                     group_context=group_context,
-                    funnel_stage=funnel_stage,
+                    funnel_stage=effective_stage,
                 )
             else:
                 # Detect chat vibe from recent context for vibe matching
@@ -348,6 +358,20 @@ class SalesBotOrchestratorV2:
                     logger.info(f"[{runtime.config.name}] Skipping repeat response in {msg.chat_id}")
                     runtime.stats["ignored"] += 1
                 else:
+                    # === TYPING INDICATOR ===
+                    # Simulate human typing before sending
+                    if runtime.config.anti_spam.typing_simulation:
+                        typing_calc = TypingSpeedCalculator()
+                        typing_time = typing_calc.estimate_typing_time(send_text)
+                        # Send typing indicator if monitor supports it
+                        try:
+                            if hasattr(runtime.monitor, 'send_typing'):
+                                await runtime.monitor.send_typing(msg.chat_id)
+                        except Exception:
+                            pass
+                        # Wait "typing" time (clamped to reasonable range)
+                        await asyncio.sleep(min(typing_time, 15.0))
+                    
                     sent = await self._send_response(runtime, msg, send_text)
                     if sent:
                         runtime.antispam.record_send(msg.chat_id)

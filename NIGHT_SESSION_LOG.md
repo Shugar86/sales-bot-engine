@@ -375,3 +375,12 @@ Key findings from Turing test game analysis:
 4. Add typing indicator integration to orchestrator
 5. Final summary
 
+
+## CYCLE 11: DM CONVERSATION FLOW & TYPING INDICATOR
+
+### Tasks:
+1. Wire typing indicator into orchestrator (before sending response)
+2. Add DM conversation context tracking
+3. Make generator DM responses aware of previous recommendations
+4. Add conversation threading to DM
+
