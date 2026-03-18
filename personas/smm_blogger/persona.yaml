@@ -95,5 +95,5 @@ persona:
       good_response: "Можно и самому, да. Но честно — 90% владельцев бизнеса начинают вести сами, через месяц забивают, и аккаунт стоит мёртвым полгода. Это не про умение, это про время. Но если у вас его реально есть — попробуйте, я могу дать чек-лист что постить."
 
   # === MODELS ===
-  router_model: "google/gemini-2.0-flash-001"
-  generator_model: "anthropic/claude-3.5-sonnet"
+  router_model: "openrouter/google/gemini-2.0-flash-lite"
+  generator_model: "openrouter/hunter-alpha"
