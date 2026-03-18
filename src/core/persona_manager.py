@@ -57,6 +57,43 @@ class ResponseExample:
 
 
 @dataclass
+class GreetingPolicyConfig:
+    """Greeting policy configuration (from ai-tutor-engine pattern)."""
+    enabled: bool = True
+    greet_only_first_response: bool = True
+    greet_only_if_user_greeted: bool = True
+    strip_greeting_if_not_allowed: bool = True
+    greeting_variants: list[str] = field(default_factory=list)
+    fallback_variants: list[str] = field(default_factory=lambda: [
+        "Я на связи. Чем помочь?",
+        "Слушаю тебя!",
+        "Что нужно?",
+    ])
+
+
+@dataclass
+class VibeConfig:
+    """Vibe configuration (from ai-tutor-engine pattern)."""
+    role: str = ""
+    voice: str = ""
+    core_emotions: list[str] = field(default_factory=list)
+    values: list[str] = field(default_factory=list)
+    taboos: list[str] = field(default_factory=list)
+
+
+@dataclass
+class BehaviorConfig:
+    """Behavior configuration (from ai-tutor-engine pattern)."""
+    on_greeting: str = ""
+    on_tool_success: str = ""
+    on_price_query: str = ""
+    on_price_shock: str = ""
+    on_tool_no_results: str = ""
+    on_tool_error: str = ""
+    on_offtopic: str = ""
+
+
+@dataclass
 class AntiSpamConfig:
     min_delay_between_messages: int = 30    # was 120 → human-realistic
     max_delay_between_messages: int = 300   # was 600 → 5min max
@@ -99,6 +136,15 @@ class PersonaConfig:
     
     # Anti-spam
     anti_spam: AntiSpamConfig = field(default_factory=AntiSpamConfig)
+    
+    # Vibe (from ai-tutor-engine pattern)
+    vibe: VibeConfig = field(default_factory=VibeConfig)
+    
+    # Behavior (from ai-tutor-engine pattern)
+    behavior: BehaviorConfig = field(default_factory=BehaviorConfig)
+    
+    # Greeting policy (from ai-tutor-engine pattern)
+    greeting_policy: GreetingPolicyConfig = field(default_factory=GreetingPolicyConfig)
     
     # Response examples (for Turing test quality)
     response_examples: list[ResponseExample] = field(default_factory=list)
@@ -168,6 +214,43 @@ def load_persona(yaml_path: str) -> PersonaConfig:
         random_typos=sp.get("random_typos", False),
     )
     
+    # Parse vibe (from ai-tutor-engine pattern)
+    vibe_data = persona_data.get("vibe", {})
+    vibe = VibeConfig(
+        role=vibe_data.get("role", ""),
+        voice=vibe_data.get("voice", ""),
+        core_emotions=vibe_data.get("core_emotions", []),
+        values=vibe_data.get("values", []),
+        taboos=vibe_data.get("taboos", []),
+    )
+    
+    # Parse behavior (from ai-tutor-engine pattern)
+    behavior_data = persona_data.get("behavior", {})
+    behavior = BehaviorConfig(
+        on_greeting=behavior_data.get("on_greeting", ""),
+        on_tool_success=behavior_data.get("on_tool_success", ""),
+        on_price_query=behavior_data.get("on_price_query", ""),
+        on_price_shock=behavior_data.get("on_price_shock", ""),
+        on_tool_no_results=behavior_data.get("on_tool_no_results", ""),
+        on_tool_error=behavior_data.get("on_tool_error", ""),
+        on_offtopic=behavior_data.get("on_offtopic", ""),
+    )
+    
+    # Parse greeting policy (from ai-tutor-engine pattern)
+    gp_data = persona_data.get("greeting_policy", {})
+    greeting_policy = GreetingPolicyConfig(
+        enabled=gp_data.get("enabled", True),
+        greet_only_first_response=gp_data.get("greet_only_first_response", True),
+        greet_only_if_user_greeted=gp_data.get("greet_only_if_user_greeted", True),
+        strip_greeting_if_not_allowed=gp_data.get("strip_greeting_if_not_allowed", True),
+        greeting_variants=gp_data.get("greeting_variants", []),
+        fallback_variants=gp_data.get("fallback_variants", [
+            "Я на связи. Чем помочь?",
+            "Слушаю тебя!",
+            "Что нужно?",
+        ]),
+    )
+    
     # Parse response examples
     response_examples = []
     for ex in persona_data.get("response_examples", []):
@@ -213,6 +296,9 @@ def load_persona(yaml_path: str) -> PersonaConfig:
         group_mode=group_mode,
         dm_mode=dm_mode,
         anti_spam=anti_spam,
+        vibe=vibe,
+        behavior=behavior,
+        greeting_policy=greeting_policy,
         knowledge_file=persona_data.get("knowledge_file", ""),
         examples_file=persona_data.get("examples_file", ""),
         router_model=persona_data.get("router_model", "openrouter/google/gemini-2.0-flash-lite"),

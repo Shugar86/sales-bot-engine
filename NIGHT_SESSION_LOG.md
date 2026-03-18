@@ -441,3 +441,23 @@ Key findings from Turing test game analysis:
 5. Night cycle 10: Polish - .gitignore, comprehensive Turing test
 6. Night cycle 11: DM flow, typing indicator, funnel auto-progression
 
+
+---
+
+# Night Session — CYCLE 13: PATTERN STEALING FROM ai-tutor-engine
+
+## Started: 2026-03-18 23:32 GMT+1
+
+### Mission: Port 7 major patterns from ai-tutor-engine to sales-bot-engine
+
+Patterns to steal:
+1. Persona YAML Upgrade (vibe, behavior, greeting_policy)
+2. Preprocess Node (deterministic shortcuts)
+3. Response Composer (greeting handling)
+4. Anaphora Resolution (context memory)
+5. Telegram HTML Rendering
+6. Price Shock Handling
+7. Off-topic Handling
+
+Starting test count: 303
+

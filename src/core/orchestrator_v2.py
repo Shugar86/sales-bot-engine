@@ -24,6 +24,15 @@ from ..monitors.anti_spam import RateLimiter, TypingSpeedCalculator
 from ..memory.user_memory import UserMemoryStore
 from ..responders.text_humanizer import humanize_text
 from ..responders.chat_vibe import detect_chat_vibe, VibeAnalysis
+from ..responders.response_composer import (
+    ResponseComposer,
+    CompositionContext,
+    GreetingPolicy,
+    is_pure_greeting,
+    looks_like_greeting,
+)
+from ..responders.preprocess import PreprocessNode, PreprocessResult
+from ..responders.anaphora_resolver import AnaphoraResolver
 from ..utils.dedup import DeduplicationStore
 from ..utils.llm_client import LLMClient
 from ..utils.logger import get_logger
@@ -56,6 +65,9 @@ class PersonaRuntime:
     antispam: RateLimiter
     memory: UserMemoryStore
     dedup: DeduplicationStore
+    composer: ResponseComposer = None  # Response composer (greeting, formatting)
+    preprocessor: PreprocessNode = None  # Deterministic shortcuts
+    anaphora: AnaphoraResolver = None  # Context anaphora resolution
     monitor: object = None  # TelegramUserbot | TelegramMonitor | VKMonitorAsync
     state: BotState = BotState.IDLE
     stats: dict = field(default_factory=lambda: {
@@ -63,6 +75,8 @@ class PersonaRuntime:
         "responses_sent": 0,
         "ignored": 0,
         "errors": 0,
+        "preprocess_shortcuts": 0,
+        "greeting_skips": 0,
     })
 
 
@@ -144,6 +158,30 @@ class SalesBotOrchestratorV2:
             storage_path=os.path.join(persona_memory_dir, "processed_messages.json")
         )
         
+        # Response Composer (greeting handling, formatting — from ai-tutor-engine pattern)
+        greeting_policy = GreetingPolicy(
+            enabled=config.greeting_policy.enabled,
+            greet_only_first_response=config.greeting_policy.greet_only_first_response,
+            greet_only_if_user_greeted=config.greeting_policy.greet_only_if_user_greeted,
+            strip_greeting_if_not_allowed=config.greeting_policy.strip_greeting_if_not_allowed,
+            greeting_variants=config.greeting_policy.greeting_variants,
+            fallback_variants=config.greeting_policy.fallback_variants,
+        )
+        composer = ResponseComposer(
+            persona_name=config.name,
+            greeting_policy=greeting_policy,
+            banned_phrases=config.vibe.taboos if config.vibe else [],
+        )
+        
+        # Preprocess Node (deterministic shortcuts — from ai-tutor-engine pattern)
+        preprocessor = PreprocessNode(
+            composer=composer,
+            followup_reuse_tools=["product_search"],
+        )
+        
+        # Anaphora Resolver (context memory — from ai-tutor-engine pattern)
+        anaphora = AnaphoraResolver(max_contexts=500)
+        
         return PersonaRuntime(
             config=config,
             llm=llm,
@@ -152,6 +190,9 @@ class SalesBotOrchestratorV2:
             antispam=antispam,
             memory=memory,
             dedup=dedup,
+            composer=composer,
+            preprocessor=preprocessor,
+            anaphora=anaphora,
         )
     
     def _persona_to_contract(self, config: PersonaConfig) -> dict:
@@ -229,7 +270,7 @@ class SalesBotOrchestratorV2:
         """
         Process one message through the full pipeline.
         
-        Pipeline: Dedup → Router → Generator → AntiSpam → Send → Memory
+        Pipeline: Dedup → Preprocess → Anaphora → Route → Generate → Compose → AntiSpam → Send → Memory
         """
         runtime.state = BotState.FETCHING
         runtime.stats["messages_processed"] += 1
@@ -238,6 +279,52 @@ class SalesBotOrchestratorV2:
         if runtime.dedup.is_processed(msg.chat_id, msg.message_id, msg.text):
             logger.debug(f"[{runtime.config.name}] Skipping duplicate: {msg.message_id}")
             return
+        
+        # === PREPROCESS (deterministic shortcuts — from ai-tutor-engine pattern) ===
+        # Pure greetings, follow-ups, price shock — skip LLM entirely
+        last_context = {
+            "last_tool_name": runtime.memory.get_last_tool(msg.user_id),
+            "last_tool_args": runtime.memory.get_last_tool_args(msg.user_id),
+        }
+        
+        is_first = runtime.memory.is_first_response(msg.user_id, msg.chat_id)
+        user_greeted = looks_like_greeting(msg.text) if msg.text else False
+        
+        preprocess_result = runtime.preprocessor.process(
+            question=msg.text or "",
+            last_context=last_context,
+            is_first_response=is_first,
+            user_greeted=user_greeted,
+            is_dm=msg.is_dm,
+        )
+        
+        if preprocess_result.has_shortcut:
+            runtime.stats["preprocess_shortcuts"] += 1
+            
+            if preprocess_result.skip_generation:
+                logger.debug(f"[{runtime.config.name}] Preprocess: skip (trivial)")
+                runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
+                runtime.state = BotState.IDLE
+                return
+            
+            if preprocess_result.shortcut_response:
+                logger.info(f"[{runtime.config.name}] Preprocess: shortcut → {preprocess_result.pipeline_step}")
+                runtime.stats["greeting_skips"] += 1
+                sent = await self._send_response(runtime, msg, preprocess_result.shortcut_response)
+                if sent:
+                    runtime.stats["responses_sent"] += 1
+                    runtime.antispam.record_send(msg.chat_id)
+                    runtime.dedup.record_bot_response(msg.chat_id, preprocess_result.shortcut_response)
+                runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
+                runtime.state = BotState.IDLE
+                return
+        
+        # === ANAPHORA RESOLUTION (context memory — from ai-tutor-engine pattern) ===
+        anaphora_result = runtime.anaphora.resolve(
+            user_id=str(msg.user_id),
+            chat_id=str(msg.chat_id),
+            question=msg.text or "",
+        )
         
         # === ROUTING ===
         runtime.state = BotState.ROUTING

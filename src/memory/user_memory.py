@@ -464,3 +464,28 @@ class UserMemoryStore:
                 continue
         
         return users
+    
+    def get_last_tool(self, user_id: str) -> Optional[str]:
+        """Get the last tool name used for this user."""
+        data = self._load(user_id)
+        return data.get("last_tool_name")
+    
+    def get_last_tool_args(self, user_id: str) -> dict:
+        """Get the last tool args used for this user."""
+        data = self._load(user_id)
+        return data.get("last_tool_args", {})
+    
+    def set_last_tool(self, user_id: str, tool_name: str, tool_args: dict = None):
+        """Record the last tool used for this user."""
+        data = self._load(user_id)
+        data["last_tool_name"] = tool_name
+        if tool_args:
+            data["last_tool_args"] = tool_args
+        self._save(user_id)
+    
+    def is_first_response(self, user_id: str, chat_id: str) -> bool:
+        """Check if this is the first response to user in chat."""
+        data = self._load(user_id)
+        messages = data.get("group_messages", [])
+        dm_messages = data.get("dm_messages", [])
+        return len(messages) == 0 and len(dm_messages) == 0
