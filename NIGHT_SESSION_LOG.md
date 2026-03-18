@@ -317,3 +317,22 @@ Key findings from Turing test game analysis:
 - Add more response_examples to all personas
 - Pass chat activity info to generator for vibe matching
 
+
+## CYCLE 7: ANTI-DETECT DEEP
+
+### Issues Found:
+1. **Typing simulation not wired up** — AntiSpam has typing_simulation config but orchestrator never sends typing indicator before response
+2. **No typing speed variation** — Real people type at different speeds. Short message = fast, long message = slow
+3. **Time-of-day uses datetime.now().hour** — But this is server time, not persona timezone
+4. **Leave-on-read is random, not contextual** — Should be smarter: respond more to questions, less to reactions
+5. **Emoji reactions don't check if message already has reactions** — Could double-react
+6. **No "activity burst" pattern** — Humans sometimes send 2-3 messages quickly, then go quiet
+7. **No conversation threading awareness** — Can't tell if message is in a thread
+
+### Implementation Plan:
+- Add typing speed calculator based on message length
+- Wire typing indicator into orchestrator
+- Make leave-on-read more contextual (questions → respond, reactions → leave)
+- Add activity burst detection
+- Add time-of-day timezone support
+

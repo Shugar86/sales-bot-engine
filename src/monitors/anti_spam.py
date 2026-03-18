@@ -15,6 +15,67 @@ from ..utils.logger import get_logger
 logger = get_logger("antispam")
 
 
+class TypingSpeedCalculator:
+    """
+    Estimates how long a human would take to type a message.
+    
+    Based on:
+    - Average Russian typing speed: 150-200 chars/min on phone
+    - Questions add thinking time (2-5s)
+    - Complex words slow down
+    - Emojis speed up (quick tap)
+    - Message length correlates with time (obviously)
+    """
+    
+    # Base typing speed: chars per second
+    BASE_SPEED = 3.0  # ~180 chars/min (phone keyboard)
+    
+    # Thinking pauses
+    QUESTION_THINKING = 3.0     # Seconds extra for questions
+    COMPLEX_WORD_BONUS = 0.5    # Seconds per complex word (>8 chars)
+    EMOJI_SPEEDUP = 0.8         # Multiplier when emojis present
+    MIN_TIME = 1.0              # Minimum typing time
+    MAX_TIME = 30.0             # Maximum typing time (cap)
+    
+    def estimate_typing_time(self, text: str) -> float:
+        """
+        Estimate typing time in seconds for a message.
+        
+        Args:
+            text: The message text
+            
+        Returns:
+            Estimated seconds to type this message
+        """
+        if not text:
+            return self.MIN_TIME
+        
+        # Base time from length
+        base_time = len(text) / self.BASE_SPEED
+        
+        # Add thinking time for questions
+        if "?" in text or "?" in text:
+            base_time += self.QUESTION_THINKING
+        
+        # Complex words slow down
+        words = text.split()
+        complex_words = [w for w in words if len(w) > 8]
+        base_time += len(complex_words) * self.COMPLEX_WORD_BONUS
+        
+        # Emojis speed up (quick tap)
+        import re
+        emoji_count = len(re.findall(r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF]', text))
+        if emoji_count > 0:
+            base_time *= self.EMOJI_SPEEDUP
+        
+        # Add natural variance (±20%)
+        import random
+        variance = random.uniform(0.8, 1.2)
+        base_time *= variance
+        
+        return max(self.MIN_TIME, min(base_time, self.MAX_TIME))
+
+
 @dataclass
 class RateLimiter:
     """
@@ -55,12 +116,43 @@ class RateLimiter:
             hour = datetime.now().hour
         return self.active_hours_start <= hour < self.active_hours_end
     
-    def should_leave_on_read(self) -> bool:
+    def should_leave_on_read(self, message_text: str = "", is_dm: bool = False) -> bool:
         """
         Decide if we should 'read but not respond'.
         Real humans don't answer ~35% of messages they read.
+        
+        Contextual: questions → less likely to leave on read.
+        DMs → never leave on read.
+        Reactions/simple messages → more likely to leave.
         """
-        return random.random() < self.leave_on_read_probability
+        # DMs should never be left on read
+        if is_dm:
+            return False
+        
+        base_probability = self.leave_on_read_probability
+        
+        if message_text:
+            text_lower = message_text.lower().strip()
+            
+            # Direct questions — respond more often
+            if "?" in message_text or any(
+                q in text_lower for q in [
+                    "как", "что", "где", "когда", "почему", "зачем",
+                    "сколько", "какой", "подскажи", "помогите", "посоветуй",
+                ]
+            ):
+                base_probability *= 0.4  # 60% less likely to leave
+            
+            # Messages that mention someone — respond more
+            if "@" in message_text:
+                base_probability *= 0.3  # 70% less likely to leave
+            
+            # Simple reactions/emojis — leave more often
+            trivial = ["👍", "😂", "❤️", "🔥", "+1", "ага", "угу", "да", "нет", "ок"]
+            if text_lower in [t.lower() for t in trivial]:
+                base_probability = min(base_probability * 1.5, 0.8)  # Up to 80%
+        
+        return random.random() < base_probability
     
     def should_use_emoji_reaction(self) -> bool:
         """
@@ -133,17 +225,20 @@ class RateLimiter:
         self._chat_send_times[chat_id].append(now)
         self._last_response_per_chat[chat_id] = now
     
-    def get_random_delay(self) -> float:
+    def get_random_delay(self, current_hour: Optional[int] = None) -> float:
         """
         Get a human-like random delay.
         Time-aware: slower at night, faster during active hours.
         Variable: sometimes quick (30s), sometimes slow (5min).
         Result is always clamped to [min_delay_sec, max_delay_sec * night_multiplier].
+        
+        Args:
+            current_hour: Override current hour (for testing/timezone support)
         """
         base_delay = random.uniform(self.min_delay_sec, self.max_delay_sec)
         
         # Night mode: multiply delay (but clamp to max)
-        if not self._is_active_hours():
+        if not self._is_active_hours(hour=current_hour):
             night_max = self.max_delay_sec * self.night_delay_multiplier
             base_delay = min(base_delay * self.night_delay_multiplier, night_max)
             logger.debug(f"Night mode: delay={base_delay:.0f}s")
