@@ -365,3 +365,13 @@ Key findings from Turing test game analysis:
 5. **Argument de-escalation not tested** — Generator prompt says "de-escalate" but no tests
 6. **No "typing indicator" before response** — Orchestrator has typing_simulation config but doesn't use it
 
+
+## CYCLE 10: POLISH
+
+### Tasks:
+1. Add .gitignore for __pycache__ and *.pyc
+2. Create comprehensive "Turing test readiness" test
+3. Final cleanup: verify all persona YAMLs have 10+ response_examples
+4. Add typing indicator integration to orchestrator
+5. Final summary
+

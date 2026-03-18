@@ -1,7 +1,40 @@
+# Python
 __pycache__/
-*.pyc
-.env
-data/
-sessions/
-*.log
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
 .venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data (not committed)
+data/
+*.json
+!package.json
+
+# Sessions (Telegram auth)
+*.session
+*.session-journal
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
