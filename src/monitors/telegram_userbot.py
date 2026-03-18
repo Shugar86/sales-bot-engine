@@ -200,6 +200,97 @@ class TelegramUserbot:
             logger.error(f"send_message error: {e}")
             return False
     
+    async def send_reaction(
+        self,
+        chat_id: str,
+        message_id: int,
+        emoji: str = "👍",
+    ) -> bool:
+        """
+        Send emoji reaction to a message.
+        
+        Args:
+            chat_id: Chat/entity ID
+            message_id: Message ID to react to
+            emoji: Emoji to react with (default: 👍)
+        """
+        if not TELETHON_AVAILABLE:
+            logger.warning("Telethon not available — cannot send reaction")
+            return False
+        
+        try:
+            entity = await self.client.get_entity(
+                int(chat_id) if chat_id.lstrip('-').isdigit() else chat_id
+            )
+            
+            await self.client.send_reaction(
+                entity=entity,
+                message=message_id,
+                reaction=emoji,
+            )
+            logger.info(f"Sent reaction {emoji} to message {message_id} in {chat_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"send_reaction error: {e}")
+            return False
+    
+    async def get_chat_history(
+        self,
+        chat_id: str,
+        limit: int = 10,
+    ) -> list[dict]:
+        """
+        Read last N messages from chat for context.
+        
+        Args:
+            chat_id: Chat/entity ID
+            limit: Number of messages to read (default 10)
+        
+        Returns:
+            List of message dicts with user_id, username, text, timestamp, etc.
+        """
+        if not TELETHON_AVAILABLE:
+            logger.warning("Telethon not available — cannot read chat history")
+            return []
+        
+        try:
+            entity = await self.client.get_entity(
+                int(chat_id) if chat_id.lstrip('-').isdigit() else chat_id
+            )
+            
+            messages = []
+            async for msg in self.client.iter_messages(entity, limit=limit):
+                if not msg.text:
+                    continue
+                
+                sender = await msg.get_sender()
+                username = getattr(sender, "username", "") or ""
+                display_name = ""
+                if sender:
+                    display_name = getattr(sender, "first_name", "") or ""
+                    last_name = getattr(sender, "last_name", "") or ""
+                    if last_name:
+                        display_name = f"{display_name} {last_name}"
+                
+                messages.append({
+                    "message_id": msg.id,
+                    "user_id": str(msg.sender_id or ""),
+                    "username": username,
+                    "display_name": display_name,
+                    "text": msg.text or "",
+                    "timestamp": int(msg.date.timestamp()) if msg.date else 0,
+                    "reply_to_message_id": msg.reply_to.reply_to_msg_id if msg.reply_to else None,
+                })
+            
+            # Reverse to chronological order (oldest first)
+            messages.reverse()
+            return messages
+            
+        except Exception as e:
+            logger.error(f"get_chat_history error: {e}")
+            return []
+    
     async def _handle_new_message(self, event):
         """Handle incoming message event."""
         try:

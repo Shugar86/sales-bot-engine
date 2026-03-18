@@ -461,3 +461,40 @@ Patterns to steal:
 
 Starting test count: 303
 
+
+### CYCLE 13 COMPLETED: Pattern Stealing from ai-tutor-engine
+
+**New Modules Created (4):**
+1. `src/responders/response_composer.py` — greeting handling, price shock, off-topic
+2. `src/responders/preprocess.py` — deterministic routing shortcuts (skip LLM)
+3. `src/utils/telegram_rendering.py` — Markdown→Telegram HTML conversion
+4. `src/responders/anaphora_resolver.py` — context memory for follow-ups
+
+**Updated Files (6):**
+1. `personas/kormoved/persona.yaml` — vibe, behavior, greeting_policy
+2. `personas/fitness/persona.yaml` — vibe, behavior, greeting_policy
+3. `personas/smm_blogger/persona.yaml` — vibe, behavior, greeting_policy
+4. `src/core/orchestrator_v2.py` — preprocess→anaphora→route→generate→compose pipeline
+5. `src/core/persona_manager.py` — VibeConfig, BehaviorConfig, GreetingPolicyConfig parsing
+6. `src/memory/user_memory.py` — get_last_tool, get_last_tool_args, is_first_response
+
+**Test Files Created (6):**
+1. `tests/test_response_composer.py` — 42 tests
+2. `tests/test_preprocess.py` — 25 tests
+3. `tests/test_telegram_rendering.py` — 28 tests
+4. `tests/test_anaphora_resolver.py` — 22 tests
+5. `tests/test_persona_upgrade.py` — 16 tests
+6. `tests/test_orchestrator_integration.py` — 14 tests
+
+**Tests: 303 → 450 (+147 new)**
+**Commit: d614d38**
+
+### Patterns Ported:
+1. ✅ Persona YAML Upgrade (vibe, behavior, greeting_policy)
+2. ✅ Preprocess Node (deterministic shortcuts)
+3. ✅ Response Composer (greeting detection, stripping)
+4. ✅ Anaphora Resolution (context memory)
+5. ✅ Telegram HTML Rendering (bold, links, images, splitting)
+6. ✅ Price Shock Handling
+7. ✅ Off-topic Handling
+
