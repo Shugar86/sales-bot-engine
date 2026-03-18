@@ -102,20 +102,33 @@ class TelegramUserbot:
         sender = msg.sender
         chat = msg.chat
         
-        # Determine chat info
-        is_dm = isinstance(chat, User) and not chat.bot
-        
-        if isinstance(chat, Channel):
-            chat_id = str(chat.id)
-            chat_title = chat.title or "Channel"
-        elif isinstance(chat, Chat):
-            chat_id = str(chat.id)
-            chat_title = chat.title or "Group"
-        elif isinstance(chat, User):
-            chat_id = str(chat.id)
-            chat_title = f"DM:{chat.first_name or ''}"
-        else:
+        if chat is None:
             return None
+        
+        # Determine chat info using duck typing (class name check)
+        # Works even without Telethon installed (for testing)
+        chat_type = type(chat).__name__
+        
+        if chat_type == "Channel":
+            chat_id = str(chat.id)
+            chat_title = getattr(chat, "title", None) or "Channel"
+            is_dm = False
+        elif chat_type == "Chat":
+            chat_id = str(chat.id)
+            chat_title = getattr(chat, "title", None) or "Group"
+            is_dm = False
+        elif chat_type == "User":
+            chat_id = str(chat.id)
+            chat_title = f"DM:{getattr(chat, 'first_name', '') or ''}"
+            is_dm = not getattr(chat, "bot", False)
+        else:
+            # Unknown chat type — try to extract id
+            if hasattr(chat, "id"):
+                chat_id = str(chat.id)
+                chat_title = getattr(chat, "title", None) or f"Unknown:{chat_id}"
+                is_dm = False
+            else:
+                return None
         
         # Determine sender info
         if sender:

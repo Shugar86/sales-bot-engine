@@ -6,7 +6,7 @@ import asyncio
 import yaml
 from unittest.mock import AsyncMock, MagicMock, patch
 from config.settings import AppConfig
-from src.core.orchestrator import SalesBotOrchestrator, BotState
+from src.core.orchestrator_legacy import SalesBotOrchestrator, BotState
 from src.core.router import Decision
 from src.monitors.telegram_monitor import TelegramMessage
 
@@ -104,10 +104,10 @@ async def test_respond_flow(tmp_config, contract_file, sample_message, monkeypat
         }), success=True),
     ])
     
-    with patch("src.core.orchestrator.LLMClient") as M:
+    with patch("src.core.orchestrator_legacy.LLMClient") as M:
         M.return_value.call = mock_call
         M.return_value.close = AsyncMock()
-        with patch("src.core.orchestrator.TelegramMonitor") as T:
+        with patch("src.core.orchestrator_legacy.TelegramMonitor") as T:
             T.return_value.send_message = AsyncMock(return_value=True)
             T.return_value.close = AsyncMock()
             
@@ -133,10 +133,10 @@ async def test_ignore_flow(tmp_config, contract_file, sample_message, monkeypatc
         }), success=True),
     ])
     
-    with patch("src.core.orchestrator.LLMClient") as M:
+    with patch("src.core.orchestrator_legacy.LLMClient") as M:
         M.return_value.call = mock_call
         M.return_value.close = AsyncMock()
-        with patch("src.core.orchestrator.TelegramMonitor") as T:
+        with patch("src.core.orchestrator_legacy.TelegramMonitor") as T:
             T.return_value.send_message = AsyncMock()
             T.return_value.close = AsyncMock()
             
@@ -164,10 +164,10 @@ async def test_dm_with_group_context(tmp_config, contract_file, sample_message, 
         MagicMock(text=json.dumps({"text": "Как я говорил, ягнёнок идеален для овчарок", "tone": "expert", "stage": "soft_sell", "remember": []}), success=True),
     ])
     
-    with patch("src.core.orchestrator.LLMClient") as M:
+    with patch("src.core.orchestrator_legacy.LLMClient") as M:
         M.return_value.call = mock_call
         M.return_value.close = AsyncMock()
-        with patch("src.core.orchestrator.TelegramMonitor") as T:
+        with patch("src.core.orchestrator_legacy.TelegramMonitor") as T:
             T.return_value.send_message = AsyncMock(return_value=True)
             T.return_value.close = AsyncMock()
             
@@ -191,10 +191,10 @@ async def test_deduplication(tmp_config, contract_file, sample_message, monkeypa
         MagicMock(text=json.dumps({"text": "Ответ", "tone": "expert", "stage": "engage", "remember": []}), success=True),
     ])
     
-    with patch("src.core.orchestrator.LLMClient") as M:
+    with patch("src.core.orchestrator_legacy.LLMClient") as M:
         M.return_value.call = mock_call
         M.return_value.close = AsyncMock()
-        with patch("src.core.orchestrator.TelegramMonitor") as T:
+        with patch("src.core.orchestrator_legacy.TelegramMonitor") as T:
             T.return_value.send_message = AsyncMock(return_value=True)
             T.return_value.close = AsyncMock()
             
@@ -212,7 +212,7 @@ async def test_deduplication(tmp_config, contract_file, sample_message, monkeypa
 async def test_get_status(tmp_config, contract_file):
     tmp_config.contract_path = contract_file
     
-    with patch("src.core.orchestrator.LLMClient") as M:
+    with patch("src.core.orchestrator_legacy.LLMClient") as M:
         M.return_value.close = AsyncMock()
         bot = SalesBotOrchestrator(tmp_config)
         await bot.initialize()

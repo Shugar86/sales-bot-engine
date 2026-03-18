@@ -347,32 +347,39 @@ class SalesBotOrchestratorV2:
             config = runtime.config
             monitor = runtime.monitor
             
+            if monitor is None:
+                logger.error(f"[{config.name}] No monitor set")
+                return False
+            
+            # Duck-typed: if monitor has send_message, call it
+            if not hasattr(monitor, "send_message"):
+                logger.error(f"[{config.name}] Monitor has no send_message method")
+                return False
+            
             if config.platform == "telegram" and config.account_type == "userbot":
-                if isinstance(monitor, TelegramUserbot):
-                    return await monitor.send_message(
-                        chat_id=msg.chat_id,
-                        text=text,
-                        reply_to=msg.message_id if not msg.is_dm else None,
-                        typing_delay=config.anti_spam.typing_simulation,
-                    )
+                return await monitor.send_message(
+                    chat_id=msg.chat_id,
+                    text=text,
+                    reply_to=msg.message_id if not msg.is_dm else None,
+                    typing_delay=config.anti_spam.typing_simulation,
+                )
             
             elif config.platform == "telegram" and config.account_type == "bot":
-                if isinstance(monitor, TelegramMonitor):
-                    return await monitor.send_message(
-                        chat_id=msg.chat_id,
-                        text=text,
-                        reply_to=msg.message_id if not msg.is_dm else None,
-                    )
+                return await monitor.send_message(
+                    chat_id=msg.chat_id,
+                    text=text,
+                    reply_to=msg.message_id if not msg.is_dm else None,
+                )
             
             elif config.platform == "vk":
-                if isinstance(monitor, VKMonitorAsync):
-                    return await monitor.send_message(
-                        peer_id=msg.chat_id,
-                        text=text,
-                    )
+                return await monitor.send_message(
+                    peer_id=msg.chat_id,
+                    text=text,
+                )
             
-            logger.error(f"[{config.name}] No send handler for platform={config.platform}")
-            return False
+            # Fallback: try generic send_message
+            logger.warning(f"[{config.name}] Unknown platform {config.platform}, trying generic send")
+            return await monitor.send_message(chat_id=msg.chat_id, text=text)
             
         except Exception as e:
             logger.error(f"[{runtime.config.name}] Send error: {e}")
