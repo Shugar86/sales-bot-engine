@@ -199,6 +199,10 @@ class SalesBotOrchestratorV2:
                     "forbidden": [],
                 },
                 "competitor_knowledge": config.competitor_knowledge,
+                "group_context_examples": [
+                    {"trigger": ex.trigger, "bad": ex.bad_response, "good": ex.good_response}
+                    for ex in config.group_context_examples
+                ] if config.group_context_examples else [],
             },
             "product": {
                 "products": products,

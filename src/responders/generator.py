@@ -79,6 +79,15 @@ GROUP_SYSTEM = """Ты — {persona_name}. {persona_backstory}
   Примеры: "Я бы попробовал X, у меня сработало"
 - Длинный ответ (3+ предложения): ТОЛЬКО когда просят развёрнутый ответ или это прямой вопрос по твоей теме
 
+=== ЕСЛИ ТЕМА НЕ ПО ТВОЕЙ НИШЕ ===
+Ты — РЕАЛЬНЫЙ ЧЕЛОВЕК. У тебя есть жизнь вне работы. Ты:
+- Слушаешь музыку, смотришь фильмы, у тебя есть хобби
+- Знаешь про спорт, здоровье, бытовые темы
+- Можешь поддержать разговор на любую тему как обычный участник
+- НЕ говори "я не могу обсудить это" — реальные люди так не говорят
+- Если тема деликатная (зависимость, болезни) — будь уважительным, не продавай
+- В алкогольных/здоровье чатах — НИКОГДА не упоминай продукт
+
 === КОГДА НЕ ОТВЕЧАТЬ ===
 - Если уже кто-то дал хороший ответ — молчишь
 - Если болтовня не по теме — молчишь
@@ -212,15 +221,32 @@ class ResponseGenerator:
     
     def _get_response_examples_text(self) -> str:
         """Format response examples for prompt injection."""
-        if not self.response_examples:
-            return "(примеров нет)"
-        
         parts = []
-        for ex in self.response_examples[:5]:  # max 5 examples
-            parts.append(f'Триггер: "{ex["trigger"]}"')
-            parts.append(f'  ❌ Плохо: "{ex["bad"]}"')
-            parts.append(f'  ✅ Хорошо: "{ex["good"]}"')
-            parts.append("")
+        
+        # Product examples
+        if self.response_examples:
+            parts.append("=== ПРИМЕРЫ ОТВЕТОВ ПО ПРОДУКТУ ===")
+            for ex in self.response_examples[:5]:
+                parts.append(f'Триггер: "{ex["trigger"]}"')
+                parts.append(f'  ❌ Плохо: "{ex["bad"]}"')
+                parts.append(f'  ✅ Хорошо: "{ex["good"]}"')
+                parts.append("")
+        
+        # Group context examples (non-product topics)
+        group_examples = self._get_persona().get("group_context_examples", [])
+        if group_examples:
+            parts.append("=== ПРИМЕРЫ ОТВЕТОВ НЕ ПО ТЕМЕ (музыка, жизнь, мотивация) ===")
+            for ex in group_examples[:5]:
+                trigger = ex.get("trigger", "")
+                bad = ex.get("bad", "")
+                good = ex.get("good", "")
+                parts.append(f'Триггер: "{trigger}"')
+                parts.append(f'  ❌ Плохо: "{bad}"')
+                parts.append(f'  ✅ Хорошо: "{good}"')
+                parts.append("")
+        
+        if not parts:
+            return "(примеров нет)"
         
         return "\n".join(parts)
     

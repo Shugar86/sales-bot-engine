@@ -106,6 +106,9 @@ class PersonaConfig:
     # Competitor knowledge (for natural conversation about competitors)
     competitor_knowledge: str = ""
     
+    # Group context examples (for non-product conversations)
+    group_context_examples: list[ResponseExample] = field(default_factory=list)
+    
     # Knowledge base
     knowledge_file: str = ""
     examples_file: str = ""
@@ -177,6 +180,15 @@ def load_persona(yaml_path: str) -> PersonaConfig:
     # Parse competitor knowledge
     competitor_knowledge = persona_data.get("competitor_knowledge", "")
     
+    # Parse group context examples (non-product conversation contexts)
+    group_context_examples = []
+    for ex in persona_data.get("group_context_examples", []):
+        group_context_examples.append(ResponseExample(
+            trigger=ex.get("trigger", ""),
+            bad_response=ex.get("bad_response", ""),
+            good_response=ex.get("good_response", ""),
+        ))
+    
     # Product
     prod = persona_data.get("product", {})
     
@@ -207,6 +219,7 @@ def load_persona(yaml_path: str) -> PersonaConfig:
         generator_model=persona_data.get("generator_model", "openrouter/hunter-alpha"),
         response_examples=response_examples,
         competitor_knowledge=competitor_knowledge,
+        group_context_examples=group_context_examples,
         yaml_path=yaml_path,
     )
     
