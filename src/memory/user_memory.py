@@ -367,6 +367,52 @@ class UserMemoryStore:
         data = self._load(user_id)
         return data.get("funnel_stage", "unknown")
     
+    def analyze_funnel_signals(self, user_id: str, message: str) -> str:
+        """
+        Analyze message for funnel progression signals.
+        Returns suggested next stage or current stage.
+        """
+        text_lower = message.lower()
+        current = self.get_funnel_stage(user_id)
+        
+        # Buying signals → ready to buy
+        buy_signals = [
+            "купить", "заказать", "сколько стоит", "как оплатить",
+            "доставка", "когда приедет", "хочу заказать", "беру",
+            "скинь ссылку", "где купить",
+        ]
+        if any(s in text_lower for s in buy_signals):
+            return "ready_to_buy"
+        
+        # Interest signals → asking questions
+        interest_signals = [
+            "подробнее", "расскажи", "а как", "а почему", "а сколько",
+            "а если", "подходит ли", "а что насчёт", "а в чём разница",
+            "интересно", "а правда что",
+        ]
+        if any(s in text_lower for s in interest_signals):
+            if current in ("unknown", "noticed"):
+                return "interested"
+            return "asking_questions"
+        
+        # Objection handling signals
+        objection_signals = [
+            "дорого", "мало денег", "не уверен", "подумаю",
+            "может позже", "не сейчас", "не могу позволить",
+        ]
+        if any(s in text_lower for s in objection_signals):
+            return "objection"
+        
+        # Disengagement signals
+        disengage_signals = [
+            "не надо", "отстань", "не интересно", "хватит",
+            "я не хочу", "мне не надо",
+        ]
+        if any(s in text_lower for s in disengage_signals):
+            return "disengaged"
+        
+        return current  # Keep current stage
+    
     def get_all_users(self, stage: str = None) -> list[dict]:
         """Получить всех юзеров (опционально фильтр по воронке)"""
         users = []

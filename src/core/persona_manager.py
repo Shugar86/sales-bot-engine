@@ -103,6 +103,9 @@ class PersonaConfig:
     # Response examples (for Turing test quality)
     response_examples: list[ResponseExample] = field(default_factory=list)
     
+    # Competitor knowledge (for natural conversation about competitors)
+    competitor_knowledge: str = ""
+    
     # Knowledge base
     knowledge_file: str = ""
     examples_file: str = ""
@@ -171,6 +174,9 @@ def load_persona(yaml_path: str) -> PersonaConfig:
             good_response=ex.get("good_response", ""),
         ))
     
+    # Parse competitor knowledge
+    competitor_knowledge = persona_data.get("competitor_knowledge", "")
+    
     # Product
     prod = persona_data.get("product", {})
     
@@ -200,6 +206,7 @@ def load_persona(yaml_path: str) -> PersonaConfig:
         router_model=persona_data.get("router_model", "openrouter/google/gemini-2.0-flash-lite"),
         generator_model=persona_data.get("generator_model", "openrouter/hunter-alpha"),
         response_examples=response_examples,
+        competitor_knowledge=competitor_knowledge,
         yaml_path=yaml_path,
     )
     

@@ -198,6 +198,7 @@ class SalesBotOrchestratorV2:
                     "patterns": [],
                     "forbidden": [],
                 },
+                "competitor_knowledge": config.competitor_knowledge,
             },
             "product": {
                 "products": products,

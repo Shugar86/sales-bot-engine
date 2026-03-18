@@ -79,7 +79,96 @@ Key findings from Turing test game analysis:
 
 ## CYCLE 1: CODER FIX
 
-(implementation to be documented)
+### Changes Made:
+
+**1. Anti-Spam (anti_spam.py)**
+- Reduced delays: 30-300s (was 180-900s)
+- Added leave-on-read: 35% probability
+- Added emoji reactions: 15% probability, context-aware (thanks→❤️, agreement→👍, funny→😂)
+- Time-of-day awareness: 3x delay multiplier at night
+- Thinking pauses: 10% chance of extra 15-60s delay
+- Stats include active_hours, leave_on_read_pct, emoji_reaction_pct
+
+**2. Memory (user_memory.py)**
+- Pluggable entity extractors via ENTITY_EXTRACTORS registry
+- kormoved → _extract_dog_info (expanded breed list)
+- fitness → _extract_fitness_info (goals, health issues)
+- Unknown → _extract_generic_info (interests, topics)
+- Fixed all datetime.utcnow() → datetime.now(timezone.utc) (146 warnings → 0)
+- Removed duplicate class-level _extract_dog_info method
+
+**3. Persona Manager (persona_manager.py)**
+- Added ResponseExample dataclass (trigger/bad_response/good_response)
+- Added response_examples field to PersonaConfig
+- Updated load_persona() to parse response_examples from YAML
+- Changed default anti_spam: 30-300s (was 120-600s)
+
+**4. Generator (generator.py)**
+- Added _get_response_examples_text() method for prompt formatting
+- Injected response_examples into GROUP_SYSTEM and DM_SYSTEM prompts
+- Added natural language tips: "иногда начинаешь с маленькой буквы"
+- Added length variance guidance: "ответы живые, не всегда одинаковой длины"
+
+**5. Orchestrator (orchestrator_v2.py)**
+- Leave-on-read check before sending
+- Emoji reaction check (with _send_emoji_reaction method for Telethon)
+- Text humanization before sending (if random_typos enabled)
+- Response repetition detection via dedup.is_repeating_response()
+- Chat activity tracking via dedup.record_bot_response()
+- Pass persona_name to UserMemoryStore for entity extraction
+
+**6. Text Humanizer (text_humanizer.py) — NEW MODULE**
+- Lowercase start (15% probability, 30% in casual mode)
+- Missing final period (20% in casual mode)
+- Random typos (5% per word, uses known Russian typo variants)
+- Adjacent key swaps for generic typos
+
+**7. Persona YAMLs**
+- kormoved: Added 6 response_examples, delays → 30-300s
+- fitness: Added 3 response_examples, delays → 30-300s
+- smm_blogger: Added 3 response_examples, delays → 30-300s
+
+**8. Tests Added**
+- test_anti_detect.py: Leave-on-read, emoji reactions, time-awareness
+- test_entity_extraction.py: Dog/fitness/generic extractors, persona mapping
+- test_text_humanizer.py: Typo injection, lowercase, casual mode
+- test_dedup.py: Activity tracking, response repetition detection
+
+### Tests: 111 → 180 (all passing)
+
+### Git commit: 3fbc9ea "Night session cycle 1-3: Turing test improvements"
+
+---
+
+## CYCLE 2: ARCHITECT REVIEW
+
+### What's Still Missing for Turing Test:
+
+1. **Conversation context injection** — Generator doesn't get recent chat context from dedup/activity
+2. **Multi-turn DM memory** — Bot forgets DM context between sessions (only in-memory cache)
+3. **Group dynamics** — No "agree with others" or "share personal stories" behavior
+4. **Funnel auto-progression** — No logic to advance funnel stage based on responses
+5. **Competitor knowledge** — Bot should know competitors' products to talk about them naturally
+6. **Voice messages** — No support for voice (real people sometimes send voice)
+7. **Reply threading** — Bot doesn't track if it already replied to a specific message
+8. **Cultural context** — No awareness of recent events, memes, news
+
+### Priority for Next Cycles:
+1. Add conversation context to generator (recent messages, chat activity)
+2. Improve DM funnel progression logic
+3. Add competitor knowledge to persona YAML
+
+---
+
+## CYCLE 2: BALDY RESEARCH
+
+(search to follow)
+
+---
+
+## CYCLE 2: CODER FIX
+
+(implementation to follow)
 
 ## CYCLE 1: COMPLETED
 
