@@ -1,13 +1,15 @@
 """
 Message Deduplication — не отвечать на одно сообщение дважды
++ Conversation tracking per chat
 """
 
 import hashlib
 import json
 import os
 import time
-from dataclasses import dataclass
-from typing import Set
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set
 
 from .logger import get_logger
 
@@ -17,10 +19,11 @@ logger = get_logger("dedup")
 @dataclass
 class DeduplicationStore:
     """
-    Хранилище для дедупликации сообщений.
+    Хранилище для дедупликации сообщений + отслеживание разговоров.
     
     Отслеживает какие сообщения уже обработаны,
     чтобы не отвечать на одно и то же дважды.
+    Также отслеживает активность бота в чатах.
     """
     
     storage_path: str = "data/memory/processed_messages.json"
@@ -28,6 +31,12 @@ class DeduplicationStore:
     
     # Внутреннее: message_hash -> timestamp
     _processed: dict = None
+    
+    # Chat activity tracking: chat_id -> last_response_timestamp
+    _chat_activity: Dict[str, float] = field(default_factory=dict)
+    
+    # Response text tracking: chat_id -> list of recent response texts (for avoiding repetition)
+    _recent_responses: Dict[str, List[str]] = field(default_factory=lambda: defaultdict(list))
     
     def __post_init__(self):
         if self._processed is None:
@@ -39,7 +48,10 @@ class DeduplicationStore:
         if os.path.exists(self.storage_path):
             try:
                 with open(self.storage_path, "r") as f:
-                    self._processed = json.load(f)
+                    data = json.load(f)
+                self._processed = data.get("processed", {})
+                self._chat_activity = data.get("chat_activity", {})
+                self._recent_responses = defaultdict(list, data.get("recent_responses", {}))
                 self._cleanup_old()
                 logger.debug(f"Loaded {len(self._processed)} processed message hashes")
             except (json.JSONDecodeError, Exception) as e:
@@ -51,7 +63,11 @@ class DeduplicationStore:
         os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
         try:
             with open(self.storage_path, "w") as f:
-                json.dump(self._processed, f)
+                json.dump({
+                    "processed": self._processed,
+                    "chat_activity": self._chat_activity,
+                    "recent_responses": dict(self._recent_responses),
+                }, f)
         except Exception as e:
             logger.error(f"Failed to save dedup store: {e}")
     
@@ -81,9 +97,62 @@ class DeduplicationStore:
         self._cleanup_old()
         self._save()
     
+    # === NEW: Chat activity tracking ===
+    
+    def record_bot_response(self, chat_id: str, response_text: str = ""):
+        """Record that the bot responded in a chat."""
+        now = time.time()
+        self._chat_activity[chat_id] = now
+        
+        # Track recent responses (keep last 10)
+        if response_text:
+            self._recent_responses[chat_id].append(response_text[:200])
+            self._recent_responses[chat_id] = self._recent_responses[chat_id][-10:]
+        
+        self._save()
+    
+    def last_bot_response_time(self, chat_id: str) -> Optional[float]:
+        """When did the bot last respond in this chat?"""
+        return self._chat_activity.get(chat_id)
+    
+    def seconds_since_last_response(self, chat_id: str) -> Optional[float]:
+        """How many seconds since bot's last response in this chat."""
+        last = self._chat_activity.get(chat_id)
+        if last is None:
+            return None
+        return time.time() - last
+    
+    def is_repeating_response(self, chat_id: str, new_response: str, similarity_threshold: float = 0.8) -> bool:
+        """
+        Check if this response is too similar to recent ones in this chat.
+        Prevents the bot from saying the same thing twice.
+        """
+        recent = self._recent_responses.get(chat_id, [])
+        if not recent:
+            return False
+        
+        new_lower = new_response.lower().strip()
+        new_words = set(new_lower.split())
+        
+        for old_response in recent:
+            old_lower = old_response.lower().strip()
+            if new_lower == old_lower:
+                return True
+            
+            # Word overlap similarity
+            old_words = set(old_lower.split())
+            if new_words and old_words:
+                overlap = len(new_words & old_words) / max(len(new_words | old_words), 1)
+                if overlap > similarity_threshold:
+                    return True
+        
+        return False
+    
     def get_stats(self) -> dict:
         """Статистика"""
         return {
             "total_tracked": len(self._processed),
+            "chats_active": len(self._chat_activity),
+            "chats_with_responses": len(self._recent_responses),
             "storage": self.storage_path,
         }

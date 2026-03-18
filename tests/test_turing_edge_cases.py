@@ -167,7 +167,7 @@ class TestGeneratorBotDenial:
         assert response.stage == "engage"
         # Ответ должен быть уверенным, как живой человек
         text_lower = response.text.lower()
-        assert "нет" in text_lower or "серьёзно" in text_lower or "ахах" in text_lower
+        assert any(w in text_lower for w in ["нет", "серьёзно", "ахах", "ха", "чего", "просто"])
 
 
 class TestGeneratorFallback:

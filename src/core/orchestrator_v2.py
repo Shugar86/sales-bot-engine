@@ -22,6 +22,7 @@ from ..monitors.telegram_monitor import TelegramMonitor, TelegramMessage
 from ..monitors.vk_monitor import VKMonitorAsync, VKMessage
 from ..monitors.anti_spam import RateLimiter
 from ..memory.user_memory import UserMemoryStore
+from ..responders.text_humanizer import humanize_text
 from ..utils.dedup import DeduplicationStore
 from ..utils.llm_client import LLMClient
 from ..utils.logger import get_logger
@@ -325,9 +326,21 @@ class SalesBotOrchestratorV2:
             # Re-check after delay
             can_send, reason = runtime.antispam.can_send(msg.chat_id)
             if can_send:
-                sent = await self._send_response(runtime, msg, response.text)
-                if sent:
-                    runtime.antispam.record_send(msg.chat_id)
+                # Apply text humanization (typos, lowercase starts, etc.)
+                send_text = response.text
+                if runtime.config.anti_spam.random_typos:
+                    is_casual = response.tone in ("casual", "humor")
+                    send_text = humanize_text(send_text, is_casual=is_casual)
+                
+                # Check if we're repeating ourselves
+                if runtime.dedup.is_repeating_response(msg.chat_id, send_text):
+                    logger.info(f"[{runtime.config.name}] Skipping repeat response in {msg.chat_id}")
+                    runtime.stats["ignored"] += 1
+                else:
+                    sent = await self._send_response(runtime, msg, send_text)
+                    if sent:
+                        runtime.antispam.record_send(msg.chat_id)
+                        runtime.dedup.record_bot_response(msg.chat_id, send_text)
             else:
                 logger.warning(f"[{runtime.config.name}] Blocked after delay: {reason}")
         else:
