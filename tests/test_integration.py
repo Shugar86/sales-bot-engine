@@ -1,4 +1,13 @@
-"""Integration Tests — end-to-end pipeline test"""
+"""
+LEGACY Integration Tests — v1 Single-Persona Path (orchestrator_legacy.py)
+
+⚠️  NOTE: These tests cover the BOT_MODE=v1 legacy path using:
+   - orchestrator_legacy.py (single-persona, Bot API)
+   - contracts/loader.py (legacy contract format)
+   - CONTRACT_PATH env var
+
+For canonical runtime tests, see test_orchestrator_v2.py and test_orchestrator_integration.py
+"""
 import pytest
 import json
 import os

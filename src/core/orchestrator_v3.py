@@ -1,7 +1,9 @@
 """
-Orchestrator v3 — "Живой человек" Pipeline
+EXPERIMENTAL: Orchestrator v3 — "Живой человек" Pipeline
 
-Новая архитектура: бот — не продавец, а живой человек в чате.
+⚠️  STATUS: EXPERIMENTAL — not wired into main.py
+   This is a research branch for future architecture ideas.
+   DO NOT use in production. See orchestrator_v2.py for canonical runtime.
 
 Pipeline:
   1. RECEIVE    — New message from monitor
@@ -13,6 +15,8 @@ Pipeline:
   7. HUMANIZE   — Typos, casual, typing delay (existing humanizer)
   8. SEND       — Send as reply if directed at me
   9. REMEMBER   — Write to memory (memory_writer)
+
+To activate: wire this class into src/main.py
 """
 
 import asyncio

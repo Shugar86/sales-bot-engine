@@ -14,11 +14,12 @@
    - `Platform` enum: TELEGRAM_BOT, TELEGRAM_USERBOT, VK
    - Factory methods: `from_telegram_message()`, `from_userbot_message()`, `from_vk_message()`
 
-2. **Multi-Persona Orchestrator** (`src/core/orchestrator.py`)
+2. **Multi-Persona Orchestrator** (`src/core/orchestrator_v2.py`)
    - `SalesBotOrchestratorV2` — manages N personas in parallel
    - Each persona gets isolated: Router, Generator, RateLimiter, Memory, Dedup
    - Pipeline: Monitor → IncomingMessage → Dedup → Router → Generator → AntiSpam → Send → Memory
    - Full v2 YAML format support with v1 contract adapter
+   - *(Note: original first draft was `orchestrator.py`, now deleted — replaced by `orchestrator_v2.py`)*
 
 3. **Legacy Preserved** (`src/core/orchestrator_legacy.py`)
    - Original v1 orchestrator saved for backward compatibility
@@ -140,7 +141,7 @@ Dockerfile
 
 ### Modified Files
 ```
-src/core/orchestrator.py       — Complete rewrite for v2
+src/core/orchestrator_v2.py    — Canonical multi-persona orchestrator (orchestrator.py deleted)
 src/core/persona_manager.py    — Fixed import paths
 src/monitors/telegram_userbot.py — Fixed type annotations + duck typing
 src/main.py                    — Added v1/v2 mode selection

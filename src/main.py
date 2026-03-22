@@ -3,8 +3,8 @@ Sales Bot Engine — Entry Point
 Запуск: python -m src.main
 
 Modes:
-  - v1 (default): Single persona via Bot API (legacy)
-  - v2: Multi-persona userbot swarm (new)
+  - v2 (default): Multi-persona userbot swarm (canonical)
+  - v1: Single persona via Bot API (legacy)
 """
 
 import asyncio

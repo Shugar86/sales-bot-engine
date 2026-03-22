@@ -1,5 +1,12 @@
 """
-Contract Loader — загрузка YAML контрактов с валидацией и hot-reload
+LEGACY: Contract Loader — YAML контракты для v1
+
+⚠️  STATUS: LEGACY — only used by BOT_MODE=v1 (orchestrator_legacy.py)
+   DO NOT use for new personas. Use personas/*/persona.yaml format instead.
+
+Загрузка YAML контрактов с валидацией и hot-reload.
+
+Migration: Replace CONTRACT_PATH with PERSONAS_DIR and use persona_manager.py
 """
 
 import os

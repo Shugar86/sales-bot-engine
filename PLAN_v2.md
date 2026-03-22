@@ -126,7 +126,7 @@ sales-bot-engine/
 │   └── fitness.session
 ├── src/
 │   ├── core/
-│   │   ├── orchestrator.py   # управляет N персонами
+│   │   ├── orchestrator_v2.py # управляет N персонами (canonical)
 │   │   ├── router.py         # Fast Router (Gemini)
 │   │   └── persona_manager.py # загрузка/перезагрузка персон
 │   ├── monitors/

@@ -1,10 +1,15 @@
 """
-Persona Loader v3 — Pydantic-based persona configuration with validation.
+EXPERIMENTAL: Persona Loader v3 — Pydantic-based persona configuration
+
+⚠️  STATUS: EXPERIMENTAL — not used by production runtime
+   Currently only test-backed. See persona_manager.py for canonical loader.
 
 Адаптировано из ai-tutor-engine/src/agents/personas/loader.py
 
 Загружает persona YAML и валидирует через Pydantic модели.
-Совместим с существующим persona_manager.py (legacy dataclass формат).
+Совместим с существующим persona_manager.py (canonical format).
+
+To activate: replace persona_manager.py usage with this loader in orchestrator_v2.py
 """
 
 import logging

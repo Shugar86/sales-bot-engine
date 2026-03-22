@@ -12,11 +12,36 @@
 5. При переходе в ЛС — мягко продаёт продукт
 6. Его не банят за спам, потому что он не спамит — он эксперт
 
-## Архитектура
+## Архитектура (Canonical: v2 Multi-Persona)
+
+```
+┌─────────────────────────────────────────┐
+│         Orchestrator v2                 │
+│  (multi-persona swarm, canonical)       │
+├──────────┬──────────┬──────────┬───────┤
+│ Persona 1│ Persona 2│ Persona 3│  ...  │
+│ Кормовед │ Фитнес   │ SMM      │       │
+├──────────┴──────────┴──────────┴───────┤
+│              Monitors Layer            │
+├──────────┬──────────┬──────────┬───────┤
+│ Telethon │ VK API   │ (other)  │       │
+│ (TG)     │          │          │       │
+└──────────┴──────────┴──────────┴───────┘
+```
+
+### Пайплайн обработки сообщения
 
 ```
 Сообщение в чате
     ↓
+┌─────────────────┐
+│  Dedup          │  (не отвечаем дважды)
+└────────┬────────┘
+         ↓
+┌─────────────────┐
+│  Preprocess     │  (shortcut-обработка)
+└────────┬────────┘
+         ↓
 ┌─────────────────┐
 │  Fast Router     │  (Gemini Flash — дёшево и быстро)
 │  Отвечать? Нет?  │
@@ -24,20 +49,32 @@
          ↓ (если да)
 ┌─────────────────┐
 │  Slow Generator  │  (Claude — качественно)
-│  Генерит ответ   │  ← читает YAML контракт + память юзера
+│  Генерит ответ   │  ← persona.yaml + память юзера
 └────────┬────────┘
          ↓
-    Отправка → Память
+┌─────────────────┐
+│  Output Validator│  (banned phrases, greeting policy)
+└────────┬────────┘
+         ↓
+┌─────────────────┐
+│  Anti-Spam       │  (typing simulation, delays)
+└────────┬────────┘
+         ↓
+    Отправка → Память (SQLite)
 ```
 
-## YAML-контракты
+## YAML-конфигурация (Canonical Format)
 
-Каждый персонаж — отдельный YAML:
+Каждая персона = отдельная директория в `personas/`:
+- `personas/<name>/persona.yaml` — полная конфигурация
+
+Структура:
 - `persona` — кто он, как говорит, чего нельзя
+- `vibe` — emotional tone, taboos
+- `behavior` — greeting policy, response examples
 - `product` — что продаёт
 - `triggers` — когда отвечать, когда молчать
 - `conversation_flow` — как вести диалог (группа vs ЛС)
-- `memory_rules` — что запоминать, что забывать
 
 ## Модели
 
@@ -46,42 +83,53 @@
 | Router | Gemini Flash | Дёшево, быстро, часто |
 | Generator | Claude Sonnet | Качественно, редко |
 
-## Быстрый старт
+## Быстрый старт (Canonical v2)
 
 ```bash
 pip install -r requirements.txt
 
 # Установить переменные
 export OPENROUTER_API_KEY="sk-or-..."
-export CONTRACT_PATH="contracts/korm/persona.yaml"
-export MONITOR_CHATS="-100123456789,-100987654321"
+export PERSONAS_DIR="./personas"
+export MEMORY_DIR="./data/memory"
 
-# Запуск
-python -m src.core.orchestrator
+# Запуск (default v2)
+python -m src.main
+
+# Или явно
+export BOT_MODE=v2
+python -m src.main
 ```
 
 ## Структура
 
 ```
 sales-bot-engine/
-├── contracts/           # YAML-контракты персонажей
-│   ├── korm/           # Продавец кормов
-│   └── demo/           # Демо-контракт
+├── personas/            # YAML-конфиги персонажей (canonical)
+│   ├── kormoved/        # Продавец кормов
+│   ├── fitness/        # Фитнес-эксперт
+│   └── smm_blogger/    # SMM-специалист
 ├── src/
-│   ├── core/           # РОутер, оркестратор
-│   ├── monitors/       # Мониторы чатов (TG, VK)
-│   ├── responders/     # Генератор ответов
-│   ├── memory/         # Память юзеров
-│   └── contracts/      # Загрузка/валидация контрактов
+│   ├── core/           # Router, Orchestrator v2 (canonical)
+│   ├── monitors/       # Monitors (TG, VK)
+│   ├── responders/     # Generator, Composer
+│   ├── memory/         # User Memory (SQLite)
+│   └── contracts/      # Legacy contract loader
 ├── data/
-│   ├── memory/         # JSON файлы памяти юзеров
-│   └── logs/           # Логи
+│   ├── memory/         # SQLite DBs per persona
+│   └── logs/           # Logs
 └── tests/
 ```
 
 ## Статус
 
 🚧 В активной разработке. См. `PLAN.md` для задач.
+
+## Runtime Inventory
+
+- **Canonical:** `src/core/orchestrator_v2.py` — multi-persona, full pipeline
+- **Legacy:** `src/core/orchestrator_legacy.py` — single-persona, Bot API (BOT_MODE=v1)
+- **Experimental:** `src/core/orchestrator_v3.py` — not wired to production
 
 ## Автор
 

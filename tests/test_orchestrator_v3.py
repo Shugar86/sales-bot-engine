@@ -1,4 +1,10 @@
-"""Tests for Orchestrator v3 Pipeline — integration tests."""
+"""
+Tests for v3 Pipeline Modules (ContextReader, VibeChecker, DecisionGate, MemoryWriter)
+
+⚠️  NOTE: These tests validate v3 pipeline components, NOT OrchestratorV3 class.
+   OrchestratorV3 is experimental and not wired into production (see orchestrator_v3.py).
+   These modules are tested in isolation but not integrated into the canonical runtime.
+"""
 import pytest
 import json
 import os

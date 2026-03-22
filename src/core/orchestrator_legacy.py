@@ -1,9 +1,17 @@
 """
-Orchestrator Legacy — v1 Single-Persona Sales Bot (Bot API)
+LEGACY: Orchestrator v1 — Single-Persona via Bot API
+
+⚠️  STATUS: LEGACY — retained only for BOT_MODE=v1
+   DO NOT add new features here. Migrate to orchestrator_v2.py instead.
 
 State machine: IDLE → FETCHING → ROUTING → GENERATING → SENDING → MEMORY_UPDATE
 
 Connects: Router + Generator + Memory + AntiSpam + Dedup
+
+Migration path:
+  - Use orchestrator_v2.py for new development
+  - Use personas/*/persona.yaml format instead of contracts/*
+  - Use persona_manager.py instead of load_contract()
 """
 
 import asyncio
