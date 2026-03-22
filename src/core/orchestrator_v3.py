@@ -21,7 +21,7 @@ from typing import Optional
 
 from ..core.context_reader import ContextReader, ChatContext
 from ..core.vibe_checker import VibeChecker, VibeCheck
-from ..core.decision_gate import DecisionGate, Decision
+from ..core.decision_gate import DecisionGate, GateDecision
 from ..core.memory_writer import MemoryWriter, UserMemoryProfile
 from ..utils.logger import get_logger
 

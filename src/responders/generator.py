@@ -179,11 +179,14 @@ class ResponseGenerator:
         model: str,
         contract: dict,
         response_examples: list[dict] = None,
+        behavior_block: str = "",
     ):
         self.llm = llm_client
         self.model = model
         self.contract = contract
         self.response_examples = response_examples or []
+        # Extra behavior/identity block compiled by PromptCompiler — injected into system prompts
+        self.behavior_block = behavior_block
     
     def _get_persona(self) -> dict:
         return self.contract.get("persona", {})
@@ -321,6 +324,10 @@ class ResponseGenerator:
             response_examples=self._get_response_examples_text(),
         )
         
+        # Inject behavior block compiled by PromptCompiler (identity/vibe/rules)
+        if self.behavior_block:
+            system = self.behavior_block + "\n\n" + system
+        
         # Inject chat vibe into system prompt
         if chat_vibe:
             vibe_modifier = chat_vibe.to_prompt_modifier()
@@ -406,6 +413,10 @@ class ResponseGenerator:
             funnel_stage=funnel_stage,
             response_examples=self._get_response_examples_text(),
         )
+        
+        # Inject behavior block compiled by PromptCompiler
+        if self.behavior_block:
+            system = self.behavior_block + "\n\n" + system
         
         user_prompt = f'Сообщение от пользователя:\n"{message_text}"\n\nТвой ответ (как живой консультант):'
         

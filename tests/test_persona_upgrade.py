@@ -14,9 +14,11 @@ from src.core.persona_manager import (
     load_persona,
     discover_personas,
     PersonaConfig,
-    VibeConfig,
-    BehaviorConfig,
-    GreetingPolicyConfig,
+)
+from src.core.vibe_schema import (
+    VibePersona,
+    VibeBehavior,
+    GreetingPolicy,
 )
 
 
@@ -24,9 +26,9 @@ from src.core.persona_manager import (
 # VIBE CONFIG
 # ══════════════════════════════════════════════════════════════
 
-class TestVibeConfig:
+class TestVibePersona:
     def test_default_vibe(self):
-        vibe = VibeConfig()
+        vibe = VibePersona(role="")
         assert vibe.role == ""
         assert vibe.voice == ""
         assert vibe.core_emotions == []
@@ -58,9 +60,9 @@ class TestVibeConfig:
 # BEHAVIOR CONFIG
 # ══════════════════════════════════════════════════════════════
 
-class TestBehaviorConfig:
+class TestVibeBehavior:
     def test_default_behavior(self):
-        behavior = BehaviorConfig()
+        behavior = VibeBehavior()
         assert behavior.on_greeting == ""
         assert behavior.on_tool_success == ""
 
@@ -91,9 +93,9 @@ class TestBehaviorConfig:
 # GREETING POLICY
 # ══════════════════════════════════════════════════════════════
 
-class TestGreetingPolicyConfig:
+class TestGreetingPolicy:
     def test_default_policy(self):
-        policy = GreetingPolicyConfig()
+        policy = GreetingPolicy()
         assert policy.enabled
         assert policy.greet_only_first_response
         assert policy.greet_only_if_user_greeted
@@ -128,8 +130,8 @@ class TestFullPersonaLoad:
         assert len(personas) == 3
         names = {p.name for p in personas}
         assert "Андрей" in names
-        assert "FitBro" in names
-        assert "Lera" in names
+        assert "Дима" in names
+        assert "Лера" in names
 
     def test_kormoved_complete(self):
         persona = load_persona("personas/kormoved/persona.yaml")
@@ -142,7 +144,7 @@ class TestFullPersonaLoad:
 
     def test_fitness_complete(self):
         persona = load_persona("personas/fitness/persona.yaml")
-        assert persona.name == "FitBro"
+        assert persona.name == "Дима"
         assert persona.vibe.role != ""
         assert persona.behavior.on_greeting != ""
         assert persona.greeting_policy.enabled
@@ -150,7 +152,7 @@ class TestFullPersonaLoad:
 
     def test_smm_complete(self):
         persona = load_persona("personas/smm_blogger/persona.yaml")
-        assert persona.name == "Lera"
+        assert persona.name == "Лера"
         assert persona.vibe.role != ""
         assert persona.behavior.on_greeting != ""
         assert persona.greeting_policy.enabled

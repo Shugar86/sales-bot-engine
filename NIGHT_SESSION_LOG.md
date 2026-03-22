@@ -542,3 +542,60 @@ The bot is NOT a sales bot. The bot is a PERSON who happens to sell something.
 - No "offtopic" concept — EVERYTHING is context-appropriate if in character
 - Taboos: politics, religion → "Ну это не моя тема"
 
+
+## CYCLE 3: AI-TUTOR-ENGINE PATTERNS — COMPLETE
+
+### Commit: acf61bd
+
+### What was adapted from ai-tutor-engine:
+
+#### 1. VibeSchema (`src/core/vibe_schema.py`)
+Pydantic models for persona configuration:
+- `VibePersona`: role, personality, backstory, voice, core_emotions, values, taboos
+- `VibeBehavior`: on_greeting/success/error/offtopic/dm/food/bot/taboo/disengage/always + greeting_policy + validators + context_policy
+- `GreetingPolicy`: enabled, greet_only_first_response, greet_only_if_user_greeted, variants, fallback_variants
+- `OutputValidators`: banned_phrases, forbid_markdown_links
+- `ContextPolicy`: namespace, keep_keys, ttl_turns
+- `AntiSpamConfig`: delay, leave_on_read, emoji_reaction, night_slowdown
+- `MemoryConfig`: remember list, reference_past, track_funnel
+- `ResponseExample`, `RouterExample`
+
+#### 2. PromptCompiler (`src/core/prompt_compiler.py`)
+Dynamic prompt assembly from persona config:
+- `compile_system_prompt(tool_status, user_context, chat_context)` → full system prompt
+- Blocks: IDENTITY, PERSONALITY, CONTEXT, BEHAVIOR (selective by tool_status), EXAMPLES, COMPETITOR, FACTUALITY, FORMAT
+- `compile_router_system_prompt()` → technical routing prompt (no personality)
+- Token counting and safety limits
+
+#### 3. ContextManager (`src/core/context_manager.py`)
+Namespace-based context with TTL:
+- Format: `{"ns": {"persona_name": {key: {value, timestamp, turn}}}}`
+- `get/set/delete/update` with whitelist checking (keep_keys)
+- TTL-based expiration on `increment_turn()`
+- Namespace isolation (prevents cross-domain contamination)
+- `from_policy()` factory from ContextPolicy
+
+#### 4. OutputValidator (`src/core/output_validators.py`)
+Deterministic response validation:
+- `banned_phrases` check (case-insensitive)
+- `greeting_policy` enforcement (strip greetings when not allowed)
+- Format checks (empty, emoji-only, too-long)
+- `get_fallback_greeting()` for policy-based fallbacks
+
+#### 5. PersonaLoaderV3 (`src/core/persona_loader_v3.py`)
+Pydantic-based persona loading:
+- `PersonaConfigV3` with full validation (name required, all fields typed)
+- Nested model parsing (greeting_policy/validators/context_policy in behavior)
+- `load(yaml_path)` → PersonaConfigV3
+- `discover(personas_dir)` → list[PersonaConfigV3]
+- Compatible with existing persona_manager.py (parallel system)
+
+### Test results:
+- 93 new tests across 5 files
+- **655 total tests passing** (was 562, +93)
+
+### Pipeline (from ai-tutor-engine):
+```
+context_manager.get() → preprocess → vibe_check → decide →
+prompt_compiler.compile() → generate → compose → validate → context_manager.update()
+```

@@ -267,8 +267,8 @@ class SalesBotOrchestrator:
             logger.error("No Telegram monitor — cannot run")
             return
 
-        from datetime import datetime
-        self.stats["started_at"] = datetime.utcnow().isoformat()
+        from datetime import datetime, timezone
+        self.stats["started_at"] = datetime.now(timezone.utc).isoformat()
 
         logger.info(
             f"Sales Bot running. "

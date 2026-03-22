@@ -25,9 +25,12 @@ from .vibe_checker import VibeCheck
 
 
 @dataclass
-class Decision:
+class GateDecision:
     """
     Финальное решение о том, как реагировать.
+
+    Отличается от router.Decision (Enum): здесь полное решение с задержкой,
+    эмодзи и причиной, а не просто тип действия.
     """
     action: str            # "respond" | "react" | "leave_read" | "disengage" | "wait"
     delay_seconds: int     # когда действовать
@@ -35,6 +38,10 @@ class Decision:
     reply_to: Optional[int] = None  # если respond, ответить на какое сообщение
     reason: str = ""       # почему такое решение
     confidence: float = 0.0  # уверенность в решении
+
+
+# Backward-compat alias — используй GateDecision в новом коде
+Decision = GateDecision
 
 
 # Эмодзи для реакций (когда вместо текста — просто эмодзи)

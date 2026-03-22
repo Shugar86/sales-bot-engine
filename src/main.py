@@ -57,8 +57,8 @@ async def run_v1():
 
 
 async def run_v2():
-    """Run v2: Multi-persona userbot swarm."""
-    from src.core.orchestrator import run_multi_persona
+    """Run v2: Multi-persona userbot swarm (full pipeline with humanizer, preprocess, anaphora)."""
+    from src.core.orchestrator_v2 import run_multi_persona
     
     config = load_config()
     setup_logging(

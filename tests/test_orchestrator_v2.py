@@ -5,7 +5,7 @@ import yaml
 from unittest.mock import AsyncMock, MagicMock, patch
 from dataclasses import dataclass
 
-from src.core.orchestrator import SalesBotOrchestratorV2, PersonaRuntime, BotState
+from src.core.orchestrator_v2 import SalesBotOrchestratorV2, PersonaRuntime, BotState
 from src.models.message import IncomingMessage, Platform
 from src.core.persona_manager import PersonaConfig, TriggerConfig
 
@@ -144,6 +144,10 @@ class TestOrchestratorPipeline:
                 success=True,
             ),
         ])
+        
+        # Disable random anti-detection behaviors for deterministic test
+        runtime.antispam.leave_on_read_probability = 0.0
+        runtime.antispam.emoji_reaction_probability = 0.0
         
         # Mock monitor (send)
         mock_monitor = MagicMock()

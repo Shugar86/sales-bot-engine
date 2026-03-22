@@ -178,13 +178,6 @@ class RateLimiter:
         # Generic positive
         return random.choice(["👍", "❤️", "🔥", "💪"])
     
-    # Внутреннее состояние
-    _send_times: List[float] = field(default_factory=list)
-    _chat_send_times: Dict[str, List[float]] = field(
-        default_factory=lambda: defaultdict(list)
-    )
-    _last_response_per_chat: Dict[str, float] = field(default_factory=dict)
-    
     def can_send(self, chat_id: str) -> tuple[bool, str]:
         """
         Проверить можно ли отправить сообщение.

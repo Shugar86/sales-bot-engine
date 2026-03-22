@@ -16,11 +16,15 @@ from typing import Callable, Optional
 
 from ..core.persona_manager import PersonaConfig, PersonaManager, discover_personas
 from ..core.router import MessageRouter, Decision, RouteResult
+from ..core.output_validators import OutputValidator, ValidationResult
+from ..core.prompt_compiler import PromptCompiler
+from ..core.vibe_schema import VibePersona, VibeBehavior, ResponseExample, GreetingPolicy as SchemaGreetingPolicy
 from ..responders.generator import ResponseGenerator, GeneratedResponse
 from ..monitors.telegram_userbot import TelegramUserbot, UserbotMessage
 from ..monitors.telegram_monitor import TelegramMonitor, TelegramMessage
 from ..monitors.vk_monitor import VKMonitorAsync, VKMessage
 from ..monitors.anti_spam import RateLimiter, TypingSpeedCalculator
+from ..monitors.base import PlatformMonitor
 from ..memory.user_memory import UserMemoryStore
 from ..responders.text_humanizer import humanize_text
 from ..responders.chat_vibe import detect_chat_vibe, VibeAnalysis
@@ -68,7 +72,8 @@ class PersonaRuntime:
     composer: ResponseComposer = None  # Response composer (greeting, formatting)
     preprocessor: PreprocessNode = None  # Deterministic shortcuts
     anaphora: AnaphoraResolver = None  # Context anaphora resolution
-    monitor: object = None  # TelegramUserbot | TelegramMonitor | VKMonitorAsync
+    output_validator: OutputValidator = None  # Post-generation output validation
+    monitor: Optional[PlatformMonitor] = None  # TelegramUserbot | TelegramMonitor | VKMonitorAsync
     state: BotState = BotState.IDLE
     stats: dict = field(default_factory=lambda: {
         "messages_processed": 0,
@@ -77,6 +82,7 @@ class PersonaRuntime:
         "errors": 0,
         "preprocess_shortcuts": 0,
         "greeting_skips": 0,
+        "validator_fixes": 0,
     })
 
 
@@ -117,7 +123,24 @@ class SalesBotOrchestratorV2:
         )
         
         # Build contract dict compatible with v1 router/generator
-        contract = self._persona_to_contract(config)
+        contract = self._build_router_contract(config)
+        
+        # PromptCompiler — builds rich behavior block from persona vibe/behavior/examples
+        prompt_compiler = PromptCompiler(
+            vibe=config.vibe,
+            behavior=config.behavior,
+            response_examples=[
+                ResponseExample(
+                    trigger=ex.trigger,
+                    bad_response=ex.bad_response,
+                    good_response=ex.good_response,
+                )
+                for ex in config.response_examples
+            ] if config.response_examples else None,
+            competitor_knowledge=config.competitor_knowledge or "",
+            personality=config.personality or "",
+        )
+        behavior_block = prompt_compiler.compile_system_prompt()
         
         # Router (fast model — decide respond/ignore)
         router = MessageRouter(
@@ -126,7 +149,7 @@ class SalesBotOrchestratorV2:
             contract=contract,
         )
         
-        # Generator (slow model — generate response, with response examples)
+        # Generator (slow model — generate response, with response examples + behavior block)
         generator = ResponseGenerator(
             llm_client=llm,
             model=config.generator_model,
@@ -135,6 +158,7 @@ class SalesBotOrchestratorV2:
                 {"trigger": ex.trigger, "bad": ex.bad_response, "good": ex.good_response}
                 for ex in config.response_examples
             ] if config.response_examples else None,
+            behavior_block=behavior_block,
         )
         
         # Anti-spam (per-persona limits)
@@ -159,18 +183,42 @@ class SalesBotOrchestratorV2:
         )
         
         # Response Composer (greeting handling, formatting — from ai-tutor-engine pattern)
-        greeting_policy = GreetingPolicy(
-            enabled=config.greeting_policy.enabled,
-            greet_only_first_response=config.greeting_policy.greet_only_first_response,
-            greet_only_if_user_greeted=config.greeting_policy.greet_only_if_user_greeted,
-            strip_greeting_if_not_allowed=config.greeting_policy.strip_greeting_if_not_allowed,
-            greeting_variants=config.greeting_policy.greeting_variants,
-            fallback_variants=config.greeting_policy.fallback_variants,
-        )
+        gp = config.greeting_policy
+        if gp:
+            greeting_policy = GreetingPolicy(
+                enabled=gp.enabled,
+                greet_only_first_response=gp.greet_only_first_response,
+                greet_only_if_user_greeted=gp.greet_only_if_user_greeted,
+                strip_greeting_if_not_allowed=gp.strip_greeting_if_not_allowed,
+                greeting_variants=gp.greeting_variants,
+                fallback_variants=gp.fallback_variants,
+            )
+            schema_greeting_policy = SchemaGreetingPolicy(
+                enabled=gp.enabled,
+                greet_only_first_response=gp.greet_only_first_response,
+                greet_only_if_user_greeted=gp.greet_only_if_user_greeted,
+                strip_greeting_if_not_allowed=gp.strip_greeting_if_not_allowed,
+                greeting_variants=gp.greeting_variants,
+            )
+        else:
+            greeting_policy = GreetingPolicy()
+            schema_greeting_policy = None
+
         composer = ResponseComposer(
             persona_name=config.name,
             greeting_policy=greeting_policy,
             banned_phrases=config.vibe.taboos if config.vibe else [],
+        )
+        
+        # Output Validator — post-generation validation (banned phrases, greeting policy, format)
+        taboos = config.vibe.taboos if config.vibe else []
+        validators_config = None
+        if taboos:
+            from ..core.vibe_schema import OutputValidators as OutputValidatorsConfig
+            validators_config = OutputValidatorsConfig(banned_phrases=taboos)
+        output_validator = OutputValidator(
+            validators_config=validators_config,
+            greeting_policy=schema_greeting_policy,
         )
         
         # Preprocess Node (deterministic shortcuts — from ai-tutor-engine pattern)
@@ -193,12 +241,16 @@ class SalesBotOrchestratorV2:
             composer=composer,
             preprocessor=preprocessor,
             anaphora=anaphora,
+            output_validator=output_validator,
         )
     
-    def _persona_to_contract(self, config: PersonaConfig) -> dict:
+    def _build_router_contract(self, config: PersonaConfig) -> dict:
         """
-        Convert PersonaConfig (v2 YAML format) to contract dict
-        compatible with v1 router/generator expectations.
+        Build the internal contract dict expected by Router and Generator.
+
+        This is NOT a file-format adapter — it constructs the internal representation
+        from a v3 PersonaConfig object. The old v1 YAML format (contracts/korm/persona.yaml)
+        is deprecated and only kept for the legacy orchestrator.
         """
         # Build triggers in v1 format
         respond_to = []
@@ -420,6 +472,28 @@ class SalesBotOrchestratorV2:
             runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
             return
         
+        # === OUTPUT VALIDATION ===
+        # Strip banned phrases, enforce greeting policy, check format
+        if runtime.output_validator:
+            is_first = runtime.memory.is_first_response(msg.user_id, msg.chat_id)
+            user_greeted = looks_like_greeting(msg.text) if msg.text else False
+            validation = runtime.output_validator.validate(
+                text=response.text,
+                is_first_response=is_first,
+                user_greeted=user_greeted,
+            )
+            if validation.violations:
+                logger.warning(
+                    f"[{runtime.config.name}] Output violations: {validation.violations}"
+                )
+                runtime.stats["validator_fixes"] += 1
+            response.text = validation.cleaned_text
+            if not response.text:
+                logger.info(f"[{runtime.config.name}] Validator cleared response for {msg.message_id}")
+                runtime.state = BotState.IDLE
+                runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
+                return
+        
         # === SENDING ===
         runtime.state = BotState.SENDING
         
@@ -505,38 +579,31 @@ class SalesBotOrchestratorV2:
         msg: IncomingMessage,
         text: str,
     ) -> bool:
-        """Send response using the appropriate platform monitor."""
+        """Send response using the appropriate platform monitor.
+
+        Dispatches on config.platform (data) rather than isinstance() so that
+        mocks and any PlatformMonitor-compatible object work without needing
+        to be a concrete class instance.
+        """
         try:
             config = runtime.config
             monitor = runtime.monitor
-            
-            if config.platform == "telegram" and config.account_type == "userbot":
-                if isinstance(monitor, TelegramUserbot):
-                    return await monitor.send_message(
-                        chat_id=msg.chat_id,
-                        text=text,
-                        reply_to=msg.message_id if not msg.is_dm else None,
-                        typing_delay=config.anti_spam.typing_simulation,
-                    )
-            
-            elif config.platform == "telegram" and config.account_type == "bot":
-                if isinstance(monitor, TelegramMonitor):
-                    return await monitor.send_message(
-                        chat_id=msg.chat_id,
-                        text=text,
-                        reply_to=msg.message_id if not msg.is_dm else None,
-                    )
-            
-            elif config.platform == "vk":
-                if isinstance(monitor, VKMonitorAsync):
-                    return await monitor.send_message(
-                        peer_id=msg.chat_id,
-                        text=text,
-                    )
-            
-            logger.error(f"[{config.name}] No send handler for platform={config.platform}")
-            return False
-            
+            if not monitor:
+                logger.error(f"[{config.name}] No monitor attached")
+                return False
+
+            kwargs: dict = {}
+            if config.platform == "vk":
+                kwargs["peer_id"] = msg.chat_id
+            else:
+                kwargs["chat_id"] = msg.chat_id
+                if not msg.is_dm:
+                    kwargs["reply_to"] = msg.message_id
+                if config.account_type == "userbot":
+                    kwargs["typing_delay"] = config.anti_spam.typing_simulation
+
+            return await monitor.send_message(text=text, **kwargs)
+
         except Exception as e:
             logger.error(f"[{runtime.config.name}] Send error: {e}")
             return False
@@ -665,6 +732,46 @@ class SalesBotOrchestratorV2:
             logger.error(f"[{config.name}] Fatal error: {e}")
             runtime.stats["errors"] += 1
     
+    # Backward-compat alias — keep old name for existing tests and code
+    _persona_to_contract = _build_router_contract
+
+    async def _run_persona_with_restart(self, runtime: PersonaRuntime):
+        """
+        Run a single persona with automatic restart on crash.
+
+        Restarts up to MAX_RESTARTS times with exponential backoff.
+        A persona crashing does not affect other running personas.
+        """
+        MAX_RESTARTS = 5
+        BASE_BACKOFF_SEC = 10.0
+
+        for attempt in range(MAX_RESTARTS + 1):
+            try:
+                await self._run_persona(runtime)
+            except asyncio.CancelledError:
+                # Intentional shutdown — do not restart
+                logger.info(f"[{runtime.config.name}] Cancelled, shutting down")
+                raise
+            except Exception as e:
+                runtime.stats["errors"] += 1
+                if attempt < MAX_RESTARTS:
+                    backoff = BASE_BACKOFF_SEC * (2 ** attempt)
+                    logger.warning(
+                        f"[{runtime.config.name}] Crashed (attempt {attempt + 1}/{MAX_RESTARTS}): "
+                        f"{e}. Restarting in {backoff:.0f}s..."
+                    )
+                    await asyncio.sleep(backoff)
+                else:
+                    logger.error(
+                        f"[{runtime.config.name}] Exhausted {MAX_RESTARTS} restart attempts. "
+                        f"Giving up."
+                    )
+                    return
+            else:
+                # Clean exit (e.g. monitor loop ended) — do not restart
+                logger.info(f"[{runtime.config.name}] Exited cleanly")
+                return
+
     async def start(self):
         """Load all personas and start them in parallel."""
         logger.info("=" * 50)
@@ -693,13 +800,13 @@ class SalesBotOrchestratorV2:
             logger.error("No valid runtimes built. Exiting.")
             return
         
-        # Start all personas in parallel
+        # Start all personas in parallel, each with its own restart logic
         self._running = True
         tasks = []
         
         for name, runtime in self.runtimes.items():
             task = asyncio.create_task(
-                self._run_persona(runtime),
+                self._run_persona_with_restart(runtime),
                 name=f"persona-{name}",
             )
             tasks.append(task)
@@ -707,18 +814,13 @@ class SalesBotOrchestratorV2:
         self._tasks = tasks
         logger.info(f"Running {len(tasks)} personas in parallel")
         
-        # Wait for all (or first crash)
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        # Wait for ALL to complete — a single persona crash no longer kills the rest
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED)
         
-        # Log crashes
         for task in done:
-            if task.exception():
-                logger.error(f"Persona task {task.get_name()} crashed: {task.exception()}")
-        
-        # Cancel remaining on crash
-        for task in pending:
-            task.cancel()
-            logger.warning(f"Cancelled: {task.get_name()}")
+            exc = task.exception() if not task.cancelled() else None
+            if exc:
+                logger.error(f"Persona task {task.get_name()} exited with error: {exc}")
     
     async def stop(self):
         """Stop all running personas."""

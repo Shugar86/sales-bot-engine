@@ -1,11 +1,13 @@
 """
-Orchestrator v2 — Multi-Persona Sales Bot
+⚠️  DEPRECATED — use orchestrator_v2.py instead.
 
-Manages N personas running in parallel.
-Each persona = 1 YAML contract + 1 platform account + 1 set of components.
+This was the first iteration of the multi-persona orchestrator. It lacks:
+  - PromptCompiler / OutputValidator integration
+  - Graceful per-persona restart (uses FIRST_COMPLETED — one crash kills all)
+  - PlatformMonitor Protocol dispatch
+  - Preprocess / Anaphora / ChatVibe pipeline steps
 
-Pipeline per message:
-  Monitor → IncomingMessage → Dedup → Router → Generator → AntiSpam → Send → Memory
+Kept only for reference. main.py imports from orchestrator_v2.py.
 """
 
 import asyncio

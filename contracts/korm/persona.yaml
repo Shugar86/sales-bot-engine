@@ -1,4 +1,6 @@
 # 🐕 Контракт персонажа: "Кормовед"
+# ⚠️  DEPRECATED — v1 format. Used only by orchestrator_legacy.py.
+#    For the active pipeline use personas/kormoved/persona.yaml (v3 format).
 # Продукт: Профессиональные корма для служебных собак
 # Целевая аудитория: Хендлеры, кинологи, ветеринары, силовые структуры
 # Каналы: Телеграм-чаты кинологов, форумы служебного собаководства

@@ -17,12 +17,16 @@ from src.core.orchestrator_v2 import (
 from src.core.persona_manager import (
     load_persona,
     PersonaConfig,
-    VibeConfig,
-    BehaviorConfig,
-    GreetingPolicyConfig,
-    AntiSpamConfig,
+    TriggerConfig,
+    IgnoreConfig,
     GroupModeConfig,
     DMModeConfig,
+)
+from src.core.vibe_schema import (
+    VibePersona,
+    VibeBehavior,
+    GreetingPolicy,
+    AntiSpamConfig,
 )
 from src.responders.response_composer import ResponseComposer, GreetingPolicy
 from src.responders.preprocess import PreprocessNode
