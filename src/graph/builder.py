@@ -10,7 +10,7 @@ Thread ID format: "{persona_name}:{user_id}:{chat_id}"
 """
 
 import os
-from typing import Any
+from typing import Any, Optional
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
@@ -23,22 +23,20 @@ from .edges import (
     after_emoji,
     after_memory,
     after_preprocess,
-    after_retrieval,
     after_route,
     after_send,
     after_send_shortcut,
     after_validate,
 )
 from .nodes import (
-    anaphora_node,
     antispam_node,
     dedup_node,
     emoji_node,
     generate_node,
     memory_node,
+    parallel_retrieval_node,
     preprocess_node,
     route_node,
-    semantic_retrieval_node,
     send_node,
     send_shortcut_node,
     validate_node,
@@ -97,8 +95,7 @@ def build_persona_graph(runtime: Any) -> StateGraph:
     # Main pipeline nodes
     workflow.add_node("dedup", dedup_node)
     workflow.add_node("preprocess", preprocess_node)
-    workflow.add_node("semantic_retrieval", semantic_retrieval_node)
-    workflow.add_node("anaphora", anaphora_node)
+    workflow.add_node("parallel_retrieval", parallel_retrieval_node)  # NEW: semantic + anaphora in parallel
     workflow.add_node("route", route_node)
     workflow.add_node("antispam", antispam_node)
     workflow.add_node("generate", generate_node)
@@ -133,22 +130,13 @@ def build_persona_graph(runtime: Any) -> StateGraph:
         after_preprocess,
         {
             "send_shortcut": "send_shortcut",
-            "parallel_retrieval": "semantic_retrieval",  # Start parallel branch
+            "parallel_retrieval": "parallel_retrieval",  # Parallel: semantic + anaphora
             "end": END,
         },
     )
 
-    # Parallel: semantic_retrieval and anaphora (both feed into route)
-    # semantic_retrieval -> route
-    workflow.add_edge("semantic_retrieval", "anaphora")  # Sequential for simplicity
-    # anaphora -> route
-    workflow.add_conditional_edges(
-        "anaphora",
-        after_retrieval,
-        {
-            "route": "route",
-        },
-    )
+    # Parallel retrieval -> Route (single node does both concurrently via asyncio.gather)
+    workflow.add_edge("parallel_retrieval", "route")
 
     # Routing -> Anti-spam, Emoji, or END
     workflow.add_conditional_edges(

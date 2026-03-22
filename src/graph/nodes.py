@@ -191,6 +191,77 @@ async def anaphora_node(state: PersonaState, config: RunnableConfig) -> dict:
 
 
 # ========================================
+# NODE 3b: Parallel Retrieval (semantic + anaphora)
+# ========================================
+
+async def parallel_retrieval_node(state: PersonaState, config: RunnableConfig) -> dict:
+    """Run semantic retrieval and anaphora resolution in PARALLEL.
+
+    This node replaces sequential semantic_retrieval_node -> anaphora_node
+    to reduce latency (~200-400ms each, parallel = ~400ms vs sequential = ~600-800ms).
+
+    Uses asyncio.gather for concurrent execution.
+
+    Returns:
+        {
+            "semantic_context": list[str],
+            "resolved_question": str
+        }
+    """
+    runtime = _get_runtime(config)
+    msg: IncomingMessage = state["message"]
+
+    async def _do_semantic_retrieval() -> list[str]:
+        """Fetch semantically relevant messages."""
+        if not msg.text:
+            return []
+        try:
+            results = await runtime.memory.search_semantic(
+                query=msg.text,
+                user_id=msg.user_id,
+                top_k=3,
+                min_similarity=0.6,
+            )
+            return [r["text"] for r in results]
+        except Exception as e:
+            logger.warning(f"[{runtime.config.name}] Semantic search error: {e}")
+            return []
+
+    async def _do_anaphora_resolution() -> str:
+        """Resolve anaphoric references."""
+        if not msg.text:
+            return ""
+        try:
+            result = runtime.anaphora.resolve(
+                user_id=str(msg.user_id),
+                chat_id=str(msg.chat_id),
+                question=msg.text,
+            )
+            resolved = result.resolved_question if result.is_resolved else msg.text
+            logger.debug(f"[{runtime.config.name}] Anaphora: {msg.text[:50]}... -> {resolved[:50]}...")
+            return resolved
+        except Exception as e:
+            logger.warning(f"[{runtime.config.name}] Anaphora error: {e}")
+            return msg.text or ""
+
+    # Execute BOTH operations concurrently
+    start_time = asyncio.get_event_loop().time()
+    semantic_context, resolved_question = await asyncio.gather(
+        _do_semantic_retrieval(),
+        _do_anaphora_resolution(),
+    )
+    elapsed = asyncio.get_event_loop().time() - start_time
+
+    logger.debug(f"[{runtime.config.name}] Parallel retrieval completed in {elapsed:.3f}s")
+
+    return {
+        "semantic_context": semantic_context,
+        "resolved_question": resolved_question,
+        "node_history": ["parallel_retrieval"],
+    }
+
+
+# ========================================
 # NODE 5: Routing
 # ========================================
 
@@ -203,7 +274,8 @@ async def route_node(state: PersonaState, config: RunnableConfig) -> dict:
     runtime = _get_runtime(config)
     msg: IncomingMessage = state["message"]
 
-    # Get recent chat context
+    # Get recent chat context (single call, cached in state if needed)
+    # For now, fetch fresh - can be optimized to use state["semantic_context"]
     recent_msgs = await runtime.memory.get_recent_messages(msg.chat_id, limit=3)
     chat_context = [m["text"] for m in recent_msgs]
 

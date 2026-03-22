@@ -242,7 +242,8 @@ class SupabaseMemory:
         )
         if not row:
             return True
-        return row["total_interactions"] <= 1
+        # First response only if no previous DM interactions
+        return row["total_interactions"] == 0 or not row["has_dm"]
 
     # ========================================
     # NOTES
@@ -413,7 +414,7 @@ class SupabaseMemory:
         # Store embedding if available
         if self._embedding_provider:
             await self.add_embedding(
-                user_id=None,  # Group messages may not have clear attribution
+                user_id=user_id,  # Pass user_id for proper filtering in search_semantic
                 chat_id=chat_id,
                 text=message,
                 role="user",

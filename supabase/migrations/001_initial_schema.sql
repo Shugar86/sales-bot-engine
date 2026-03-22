@@ -140,6 +140,31 @@ CREATE INDEX IF NOT EXISTS idx_emb_persona_chat
 -- FUNCTIONS
 -- ========================================
 
+-- Update user interaction (upsert with counter increment)
+CREATE OR REPLACE FUNCTION update_user_interaction(
+    p_user_id        TEXT,
+    p_persona_name   TEXT,
+    p_username       TEXT DEFAULT '',
+    p_display_name   TEXT DEFAULT ''
+)
+RETURNS VOID AS $$
+BEGIN
+    INSERT INTO users (
+        user_id, persona_name, username, display_name,
+        first_seen, last_seen, total_interactions
+    )
+    VALUES (
+        p_user_id, p_persona_name, p_username, p_display_name,
+        NOW(), NOW(), 1
+    )
+    ON CONFLICT (user_id, persona_name) DO UPDATE SET
+        last_seen = NOW(),
+        total_interactions = users.total_interactions + 1,
+        username = EXCLUDED.username,
+        display_name = EXCLUDED.display_name;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Semantic search function with filtering
 CREATE OR REPLACE FUNCTION match_messages(
     query_embedding vector(1024),

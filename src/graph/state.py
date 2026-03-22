@@ -4,16 +4,11 @@ Defines the state structure for the sales bot pipeline.
 State is persisted between invocations via PostgresSaver checkpointer.
 """
 
+import operator
 from typing import Annotated, Optional
 from typing_extensions import TypedDict
 
 from ..models.message import IncomingMessage
-
-
-# Annotation for list append reducer
-def _add_to_list(existing: list, new: list) -> list:
-    """Reducer that appends to list."""
-    return existing + new
 
 
 class PersonaState(TypedDict):
@@ -88,8 +83,8 @@ class PersonaState(TypedDict):
     # ========================================
     # DEBUG/ANALYSIS
     # ========================================
-    node_history: Annotated[list[str], _add_to_list]
-    """History of nodes visited (for debugging)."""
+    node_history: Annotated[list[str], operator.add]
+    """History of nodes visited (for debugging). Accumulates via operator.add reducer."""
 
     error_message: Optional[str]
     """Error message if processing failed."""
