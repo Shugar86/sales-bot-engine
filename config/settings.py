@@ -54,13 +54,12 @@ class MemoryConfig:
 
 @dataclass
 class AppConfig:
-    """Главный конфиг"""
+    """Главный конфиг (Production Unified Architecture)"""
     llm: LLMConfig = field(default_factory=LLMConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     antispam: AntiSpamConfig = field(default_factory=AntiSpamConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
 
-    contract_path: str = field(default_factory=lambda: os.getenv("CONTRACT_PATH", "contracts/korm/persona.yaml"))
     check_interval: int = field(default_factory=lambda: int(os.getenv("CHECK_INTERVAL", "60")))
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
     log_file: str = field(default_factory=lambda: os.getenv("LOG_FILE", "data/logs/sales_bot.log"))

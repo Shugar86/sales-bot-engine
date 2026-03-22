@@ -1,11 +1,11 @@
-"""Tests for Orchestrator v2 — multi-persona orchestrator."""
+"""Tests for Orchestrator — multi-persona orchestrator."""
 import pytest
 import json
 import yaml
 from unittest.mock import AsyncMock, MagicMock, patch
 from dataclasses import dataclass
 
-from src.core.orchestrator_v2 import SalesBotOrchestratorV2, PersonaRuntime, BotState
+from src.core.orchestrator import SalesBotOrchestrator, PersonaRuntime, BotState
 from src.models.message import IncomingMessage, Platform
 from src.core.persona_manager import PersonaConfig, TriggerConfig
 
@@ -71,7 +71,7 @@ def personas_dir(tmp_path):
 @pytest.fixture
 def orchestrator(personas_dir, tmp_path):
     """Create orchestrator with test config."""
-    return SalesBotOrchestratorV2(
+    return SalesBotOrchestrator(
         personas_dir=personas_dir,
         memory_dir=str(tmp_path / "memory"),
         openrouter_api_key="test-key",
@@ -99,9 +99,9 @@ class TestOrchestratorLoading:
         assert runtime.llm is not None
     
     def test_persona_to_contract_conversion(self, orchestrator):
-        """v2 persona config should convert to v1 contract format."""
+        """Persona config should convert to router contract format."""
         configs = orchestrator.load_personas()
-        contract = orchestrator._persona_to_contract(configs[0])
+        contract = orchestrator._build_router_contract(configs[0])
         
         assert "persona" in contract
         assert "product" in contract

@@ -1,22 +1,16 @@
 """
-EXPERIMENTAL: Decision Gate — финальное решение: respond / react / leave-on-read / disengage / wait
+Decision Gate — Final Decision Module
 
-⚠️  STATUS: EXPERIMENTAL — part of unwired v3 pipeline
-   Not imported by orchestrator_v2.py (canonical runtime).
-   Currently only used by orchestrator_v3.py (experimental).
+Decides: respond / react / leave-on-read / disengage / wait
 
-Принимает решение на основе:
-- Результата vibe_checker (стоит ли отвечать?)
-- Контекста чата (направлено ли на меня?)
-- Конфигурации anti_spam (вероятность leave-on-read, emoji reaction)
-- Времени суток (night slowdown)
+Inputs:
+- VibeCheck result (from vibe_checker)
+- ChatContext (from context_reader)
+- Anti-spam state
 
-Философия:
-- Реальный человек не отвечает на каждое сообщение
-- 35% сообщений — просто прочитать и промолчать
-- 15% — ответить эмодзи вместо текста
+Output: Decision with delay, emoji, reasoning.
 
-To activate: wire orchestrator_v3.py into src/main.py
+Extension point for future pipeline enhancements.
 """
 
 import random

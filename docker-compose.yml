@@ -1,4 +1,4 @@
-# Sales Bot Engine v2 — Docker Compose
+# Sales Bot Engine — Docker Compose (Production)
 #
 # Usage:
 #   1. Copy .env.example to .env and fill in your values
@@ -19,63 +19,60 @@ services:
       dockerfile: Dockerfile
     container_name: sales-bot-engine
     restart: unless-stopped
-    
+
     environment:
       # === General ===
-      - BOT_MODE=v2
       - PERSONAS_DIR=/app/personas
       - MEMORY_DIR=/app/data/memory
       - LOG_LEVEL=INFO
       - LOG_FILE=/app/data/logs/sales_bot.log
-      
+
       # === LLM ===
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - FAST_MODEL=google/gemini-2.0-flash-001
       - SLOW_MODEL=anthropic/claude-3.5-sonnet
       - LLM_TEMPERATURE=0.7
-      
-      # === Telegram (if using Bot API mode) ===
+
+      # === Telegram Bot API (optional, for bot mode) ===
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      
+
       # === Persona-specific secrets (loaded by persona_manager) ===
       # Kormoved
       - KORMOVED_API_ID=${KORMOVED_API_ID:-}
       - KORMOVED_API_HASH=${KORMOVED_API_HASH:-}
       - KORMOVED_PHONE=${KORMOVED_PHONE:-}
-      
+
       # FitBro
       - FITBRO_API_ID=${FITBRO_API_ID:-}
       - FITBRO_API_HASH=${FITBRO_API_HASH:-}
       - FITBRO_PHONE=${FITBRO_PHONE:-}
-      
+
       # Lera (SMM)
       - LERA_API_ID=${LERA_API_ID:-}
       - LERA_API_HASH=${LERA_API_HASH:-}
       - LERA_PHONE=${LERA_PHONE:-}
-      
-      # VK tokens
+
+      # VK tokens (optional)
       - KORMOVED_VK_TOKEN=${KORMOVED_VK_TOKEN:-}
       - FITBRO_VK_TOKEN=${FITBRO_VK_TOKEN:-}
-    
+
     volumes:
       # Personas configs (read-only)
       - ./personas:/app/personas:ro
-      
+
       # Persistent data
       - ./data:/app/data
-      
+
       # Telegram session files (userbot needs persistent sessions)
       - ./sessions:/app/sessions
-      
-      # Contracts (for v1 compatibility)
-      - ./contracts:/app/contracts:ro
-    
-    # Health check
+
+    # Health check (uses the health module)
     healthcheck:
-      test: ["CMD", "python3", "-c", "import sys; sys.exit(0)"]
+      test: ["CMD", "python3", "-m", "src.core.health"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 60s
     
     # Resource limits
     deploy:
@@ -96,7 +93,7 @@ services:
 
   # === Optional: One container per persona (advanced) ===
   # Uncomment if you want isolation between personas
-  
+
   # kormoved:
   #   build:
   #     context: .
@@ -104,7 +101,6 @@ services:
   #   container_name: persona-kormoved
   #   restart: unless-stopped
   #   environment:
-  #     - BOT_MODE=v2
   #     - PERSONAS_DIR=/app/personas/kormoved
   #     - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
   #     - KORMOVED_API_ID=${KORMOVED_API_ID}

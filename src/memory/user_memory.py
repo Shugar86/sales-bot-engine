@@ -205,6 +205,23 @@ class UserMemoryStore:
         self._conn.commit()
 
         self._extractor = self._get_extractor()
+        self._db_lock = asyncio.Lock() if False else None  # Not used but reserved for future async
+
+    def _execute_with_retry(self, sql: str, parameters: tuple = None, max_retries: int = 3) -> sqlite3.Cursor:
+        """Execute SQL with retry on database locked error."""
+        for attempt in range(max_retries):
+            try:
+                if parameters:
+                    return self._conn.execute(sql, parameters)
+                return self._conn.execute(sql)
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and attempt < max_retries - 1:
+                    import time
+                    wait = 0.05 * (2 ** attempt)  # 50ms, 100ms, 200ms
+                    logger.warning(f"Database locked, retrying in {wait}s (attempt {attempt + 1})")
+                    time.sleep(wait)
+                    continue
+                raise
 
     def _get_extractor(self) -> Callable:
         for key, extractor in ENTITY_EXTRACTORS.items():
@@ -226,7 +243,7 @@ class UserMemoryStore:
     def _ensure_user(self, user_id: str, username: str = "", display_name: str = ""):
         """Upsert user row — idempotent."""
         now = self._now()
-        self._conn.execute(
+        self._execute_with_retry(
             """
             INSERT INTO users (user_id, username, display_name, first_seen, last_seen)
             VALUES (?, ?, ?, ?, ?)
@@ -239,9 +256,10 @@ class UserMemoryStore:
         )
 
     def _load_extra(self, user_id: str) -> dict:
-        row = self._conn.execute(
+        cursor = self._execute_with_retry(
             "SELECT extra FROM users WHERE user_id = ?", (user_id,)
-        ).fetchone()
+        )
+        row = cursor.fetchone()
         if not row:
             return {}
         try:

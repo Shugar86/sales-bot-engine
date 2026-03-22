@@ -20,19 +20,19 @@ class TestCompetitorKnowledge:
     
     def test_competitor_knowledge_in_contract(self):
         """Competitor knowledge should be passed to the contract dict."""
-        from src.core.orchestrator_v2 import SalesBotOrchestratorV2
+        from src.core.orchestrator import SalesBotOrchestrator
         from src.core.persona_manager import PersonaConfig, AntiSpamConfig
-        
+
         config = PersonaConfig(
             name="Test",
             personality="Test persona",
             competitor_knowledge="Royal Canin: Норм корм.",
             anti_spam=AntiSpamConfig(),
         )
-        
-        orchestrator = SalesBotOrchestratorV2(personas_dir="/tmp")
-        contract = orchestrator._persona_to_contract(config)
-        
+
+        orchestrator = SalesBotOrchestrator(personas_dir="/tmp")
+        contract = orchestrator._build_router_contract(config)
+
         assert contract["persona"]["competitor_knowledge"] == "Royal Canin: Норм корм."
     
     def test_competitor_knowledge_in_style(self):

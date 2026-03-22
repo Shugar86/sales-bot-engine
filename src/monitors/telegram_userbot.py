@@ -1,7 +1,13 @@
 """
-Telegram Userbot Monitor — Telethon-based
+Telegram Userbot Monitor — Telethon-based (Production)
+
 Reads ALL messages in groups (no need to add bot).
 Sends as a regular user account.
+
+Features:
+- Reconnection with exponential backoff
+- Retry for send operations
+- Proper graceful shutdown
 """
 
 import asyncio
@@ -12,6 +18,9 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from ..utils.logger import get_logger
+from ..core.retry import retry_with_backoff, TELEGRAM_SEND_POLICY
+
+logger = get_logger("telegram-userbot")
 
 logger = get_logger("telegram-userbot")
 
@@ -88,10 +97,33 @@ class TelegramUserbot:
         return me
     
     async def stop(self):
-        """Stop the userbot client."""
+        """Stop the userbot client gracefully."""
         self._running = False
-        await self.client.disconnect()
-        logger.info("Userbot stopped")
+        try:
+            # Disconnect will break run_until_disconnected()
+            await self.client.disconnect()
+            logger.info("Userbot stopped")
+        except Exception as e:
+            logger.warning(f"Error during userbot stop: {e}")
+
+    def is_connected(self) -> bool:
+        """Check if client is connected."""
+        return self.client.is_connected()
+
+    async def reconnect(self) -> bool:
+        """Attempt to reconnect the client."""
+        try:
+            if not self.client.is_connected():
+                await self.client.connect()
+                if not await self.client.is_user_authorized():
+                    logger.error("Client not authorized after reconnect")
+                    return False
+                logger.info("Userbot reconnected successfully")
+                return True
+            return True
+        except Exception as e:
+            logger.error(f"Reconnection failed: {e}")
+            return False
     
     def _parse_message(self, event) -> Optional[UserbotMessage]:
         """Parse Telethon event into UserbotMessage."""
@@ -169,35 +201,49 @@ class TelegramUserbot:
         typing_delay: bool = True,
     ) -> bool:
         """
-        Send message as user. Simulates typing.
-        
+        Send message as user. Simulates typing with retry.
+
         Args:
             chat_id: Chat/entity ID
             text: Message text
             reply_to: Message ID to reply to
             typing_delay: Simulate typing (human-like)
+
+        Returns:
+            True if sent successfully
         """
-        try:
+        async def _do_send():
+            # Ensure connected
+            if not self.client.is_connected():
+                await self.reconnect()
+
             # Resolve entity
-            entity = await self.client.get_entity(int(chat_id) if chat_id.lstrip('-').isdigit() else chat_id)
-            
+            entity = await self.client.get_entity(
+                int(chat_id) if chat_id.lstrip('-').isdigit() else chat_id
+            )
+
             # Simulate typing
             if typing_delay:
-                # Typing time proportional to message length (30-80 chars/sec)
                 chars_per_sec = random.uniform(30, 80)
-                typing_time = min(len(text) / chars_per_sec, 15)  # max 15 sec
-                typing_time = max(typing_time, 1.5)  # min 1.5 sec
-                
+                typing_time = min(len(text) / chars_per_sec, 15)
+                typing_time = max(typing_time, 1.5)
+
                 async with self.client.action(entity, 'typing'):
                     await asyncio.sleep(typing_time)
-            
+
             # Send
             await self.client.send_message(entity, text, reply_to=reply_to)
             logger.info(f"Sent to {chat_id}: {text[:80]}...")
             return True
-            
+
+        try:
+            return await retry_with_backoff(
+                _do_send,
+                policy=TELEGRAM_SEND_POLICY,
+                name=f"send_message:{chat_id}",
+            )
         except Exception as e:
-            logger.error(f"send_message error: {e}")
+            logger.error(f"send_message failed after retries: {e}")
             return False
     
     async def send_reaction(
@@ -322,8 +368,8 @@ class TelegramUserbot:
                     )
                     if replied_msg and replied_msg.sender_id == self._my_id:
                         msg.is_reply_to_me = True
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Could not check reply-to: {e}")
             
             # Call the handler
             if self._callback:
@@ -355,9 +401,24 @@ class TelegramUserbot:
         self.client.on(events.NewMessage())(self._handle_new_message)
         
         logger.info(f"Monitoring chats: {self._allowed_chats or 'ALL'}")
-        
-        # Run until disconnected
-        await self.client.run_until_disconnected()
+
+        # Run with reconnection loop
+        while self._running:
+            try:
+                await self.client.run_until_disconnected()
+                if not self._running:
+                    break
+                # Disconnected but still running - try to reconnect
+                logger.warning("Disconnected, attempting reconnect in 5s...")
+                await asyncio.sleep(5)
+                if not await self.reconnect():
+                    logger.error("Failed to reconnect, will retry in 30s")
+                    await asyncio.sleep(30)
+            except Exception as e:
+                if not self._running:
+                    break
+                logger.error(f"Connection error: {e}, retrying in 10s...")
+                await asyncio.sleep(10)
 
 
 class TelegramUserbotMulti:

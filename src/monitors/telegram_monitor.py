@@ -1,16 +1,25 @@
 """
-Telegram Monitor — long polling, fetch messages, send responses
+Telegram Monitor — long polling, fetch messages, send responses (Production)
+
+Features:
+- Persistent offset storage (survives restart)
+- Retry with exponential backoff for send operations
+- 429 rate limit handling with Retry-After
+- Connection health checks
 """
 
 import asyncio
+import json
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 import httpx
 
 from ..utils.logger import get_logger
+from ..core.retry import retry_with_backoff, TELEGRAM_SEND_POLICY, TELEGRAM_API_POLICY
 
 logger = get_logger("telegram")
 
@@ -38,12 +47,47 @@ class TelegramMonitor:
     парсит их и передаёт в callback для обработки.
     """
     
-    def __init__(self, bot_token: str, poll_timeout: int = 30):
+    def __init__(self, bot_token: str, poll_timeout: int = 30, storage_dir: str = None):
         self.token = bot_token
         self.poll_timeout = poll_timeout
         self.base_url = f"https://api.telegram.org/bot{bot_token}"
         self.offset = 0
         self._client: Optional[httpx.AsyncClient] = None
+        self._running = False
+
+        # Offset storage for persistence across restarts
+        self._storage_dir = Path(storage_dir) if storage_dir else Path("data/memory")
+        self._storage_dir.mkdir(parents=True, exist_ok=True)
+        self._offset_file = self._storage_dir / f"tg_offset_{self._get_bot_id()}.json"
+        self._load_offset()
+
+    def _get_bot_id(self) -> str:
+        """Extract bot ID from token for filename."""
+        if ":" in self.token:
+            return self.token.split(":")[0]
+        return "unknown"
+
+    def _load_offset(self):
+        """Load last known offset from storage."""
+        try:
+            if self._offset_file.exists():
+                with open(self._offset_file, "r") as f:
+                    data = json.load(f)
+                    self.offset = data.get("offset", 0)
+                    logger.info(f"Loaded offset: {self.offset}")
+        except Exception as e:
+            logger.warning(f"Could not load offset: {e}")
+            self.offset = 0
+
+    def _save_offset(self):
+        """Save current offset to storage (atomic write)."""
+        try:
+            tmp_file = self._offset_file.with_suffix(".tmp")
+            with open(tmp_file, "w") as f:
+                json.dump({"offset": self.offset, "saved_at": time.time()}, f)
+            tmp_file.replace(self._offset_file)
+        except Exception as e:
+            logger.warning(f"Could not save offset: {e}")
     
     @property
     def client(self) -> httpx.AsyncClient:
@@ -57,12 +101,12 @@ class TelegramMonitor:
     
     async def get_updates(self) -> list[dict]:
         """
-        Long polling getUpdates.
-        
+        Long polling getUpdates with retry.
+
         Returns:
-            Список обновлений от Telegram
+            List of updates from Telegram
         """
-        try:
+        async def _fetch():
             response = await self.client.get(
                 f"{self.base_url}/getUpdates",
                 params={
@@ -71,32 +115,43 @@ class TelegramMonitor:
                     "allowed_updates": '["message"]',
                 },
             )
-            
+
             if response.status_code == 409:
                 logger.error("409 Conflict — another bot instance is running!")
-                return []
-            
-            if response.status_code != 200:
-                logger.error(f"getUpdates failed: {response.status_code} {response.text[:200]}")
-                return []
-            
+                raise ConnectionError("409 Conflict - another bot instance running")
+
+            if response.status_code == 429:
+                retry_after = response.json().get("parameters", {}).get("retry_after", 30)
+                logger.warning(f"Rate limited by Telegram, retry after {retry_after}s")
+                await asyncio.sleep(retry_after)
+                raise ConnectionError(f"429 Rate limited (retry_after: {retry_after})")
+
+            response.raise_for_status()
+
             data = response.json()
             if not data.get("ok"):
-                logger.error(f"getUpdates not ok: {data}")
-                return []
-            
-            updates = data.get("result", [])
-            
-            # Обновляем offset
+                raise ValueError(f"getUpdates not ok: {data}")
+
+            return data.get("result", [])
+
+        try:
+            updates = await retry_with_backoff(
+                _fetch,
+                policy=TELEGRAM_API_POLICY,
+                name="get_updates",
+            )
+
+            # Update offset and save
             for update in updates:
                 update_id = update.get("update_id", 0)
                 if update_id >= self.offset:
                     self.offset = update_id + 1
-            
+            self._save_offset()
+
             return updates
-            
+
         except httpx.TimeoutException:
-            # Таймаут — нормально для long polling
+            # Timeout is normal for long polling
             return []
         except Exception as e:
             logger.error(f"getUpdates error: {e}")
@@ -130,51 +185,54 @@ class TelegramMonitor:
     
     async def send_message(self, chat_id: str, text: str, reply_to: int = None) -> bool:
         """
-        Отправить сообщение.
-        
+        Send message with retry.
+
         Args:
-            chat_id: ID чата
-            text: Текст сообщения
-            reply_to: ID сообщения для reply (опционально)
-        
+            chat_id: Chat ID
+            text: Message text
+            reply_to: Message ID to reply to (optional)
+
         Returns:
-            True если отправлено успешно
+            True if sent successfully
         """
         payload = {
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
         }
-        
+
         if reply_to:
             payload["reply_to_message_id"] = reply_to
-        
-        try:
+
+        async def _do_send():
             response = await self.client.post(
                 f"{self.base_url}/sendMessage",
                 json=payload,
             )
-            
+
             if response.status_code == 429:
                 retry_after = response.json().get("parameters", {}).get("retry_after", 30)
                 logger.warning(f"Rate limited by Telegram, retry after {retry_after}s")
                 await asyncio.sleep(retry_after)
-                return False
-            
-            if response.status_code != 200:
-                logger.error(f"sendMessage failed: {response.status_code} {response.text[:200]}")
-                return False
-            
+                raise ConnectionError(f"429 Rate limited (retry_after: {retry_after})")
+
+            response.raise_for_status()
+
             data = response.json()
-            if data.get("ok"):
-                logger.info(f"Sent to {chat_id}: {text[:80]}...")
-                return True
-            
-            logger.error(f"sendMessage not ok: {data}")
-            return False
-            
+            if not data.get("ok"):
+                raise ValueError(f"sendMessage not ok: {data}")
+
+            logger.info(f"Sent to {chat_id}: {text[:80]}...")
+            return True
+
+        try:
+            return await retry_with_backoff(
+                _do_send,
+                policy=TELEGRAM_SEND_POLICY,
+                name=f"send_message:{chat_id}",
+            )
         except Exception as e:
-            logger.error(f"sendMessage error: {e}")
+            logger.error(f"sendMessage failed after retries: {e}")
             return False
     
     async def poll_loop(
@@ -184,43 +242,49 @@ class TelegramMonitor:
         interval: float = 1.0,
     ):
         """
-        Главный цикл polling.
-        
+        Main polling loop.
+
         Args:
-            callback: async функция (message: TelegramMessage) -> None
-            allowed_chats: Список ID чатов для мониторинга (None = все)
-            interval: Пауза между poll запросами при пустом ответе
+            callback: async function (message: TelegramMessage) -> None
+            allowed_chats: List of chat IDs to monitor (None = all)
+            interval: Pause between poll requests when empty response
         """
         logger.info(f"Starting poll loop. Monitoring: {allowed_chats or 'ALL'}")
-        
-        while True:
-            try:
-                updates = await self.get_updates()
-                
-                for update in updates:
-                    msg = self.parse_update(update)
-                    if not msg:
-                        continue
-                    
-                    # Фильтр по чатам (для групп; DM всегда пропускаем)
-                    if not msg.is_dm and allowed_chats:
-                        if msg.chat_id not in allowed_chats:
+        self._running = True
+
+        try:
+            while self._running:
+                try:
+                    updates = await self.get_updates()
+
+                    for update in updates:
+                        msg = self.parse_update(update)
+                        if not msg:
                             continue
-                    
-                    try:
-                        await callback(msg)
-                    except Exception as e:
-                        logger.error(f"Callback error for {msg.message_id}: {e}")
-                
-                if not updates:
-                    await asyncio.sleep(interval)
-                    
-            except asyncio.CancelledError:
-                logger.info("Poll loop cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Poll loop error: {e}")
-                await asyncio.sleep(5)  # Пауза при ошибке
+
+                        # Filter by chat (DM always passes)
+                        if not msg.is_dm and allowed_chats:
+                            if msg.chat_id not in allowed_chats:
+                                continue
+
+                        try:
+                            await callback(msg)
+                        except Exception as e:
+                            logger.error(f"Callback error for {msg.message_id}: {e}")
+
+                    if not updates:
+                        await asyncio.sleep(interval)
+
+                except asyncio.CancelledError:
+                    logger.info("Poll loop cancelled")
+                    break
+                except Exception as e:
+                    logger.error(f"Poll loop error: {e}")
+                    await asyncio.sleep(5)
+        finally:
+            self._running = False
+            await self.close()
+            logger.info("Poll loop ended, client closed")
 
 
 async def test_connection(bot_token: str) -> dict:

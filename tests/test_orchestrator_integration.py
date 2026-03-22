@@ -1,5 +1,5 @@
 """
-Tests for Orchestrator v2 integration with new pipeline.
+Tests for Orchestrator integration with new pipeline.
 
 Tests the preprocess → route → generate → compose pipeline:
 - PersonaRuntime has new components
@@ -9,8 +9,8 @@ Tests the preprocess → route → generate → compose pipeline:
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock
-from src.core.orchestrator_v2 import (
-    SalesBotOrchestratorV2,
+from src.core.orchestrator import (
+    SalesBotOrchestrator,
     PersonaRuntime,
     BotState,
 )
@@ -79,11 +79,11 @@ class TestOrchestratorBuildRuntime:
     def test_build_runtime_creates_composer(self):
         """_build_runtime should create ResponseComposer."""
         config = load_persona("personas/kormoved/persona.yaml")
-        orchestrator = SalesBotOrchestratorV2(
+        orchestrator = SalesBotOrchestrator(
             openrouter_api_key="test-key",
         )
         runtime = orchestrator._build_runtime(config)
-        
+
         assert runtime.composer is not None
         assert isinstance(runtime.composer, ResponseComposer)
         assert runtime.composer.persona_name == "Андрей"
@@ -91,33 +91,33 @@ class TestOrchestratorBuildRuntime:
     def test_build_runtime_creates_preprocessor(self):
         """_build_runtime should create PreprocessNode."""
         config = load_persona("personas/kormoved/persona.yaml")
-        orchestrator = SalesBotOrchestratorV2(
+        orchestrator = SalesBotOrchestrator(
             openrouter_api_key="test-key",
         )
         runtime = orchestrator._build_runtime(config)
-        
+
         assert runtime.preprocessor is not None
         assert isinstance(runtime.preprocessor, PreprocessNode)
 
     def test_build_runtime_creates_anaphora(self):
         """_build_runtime should create AnaphoraResolver."""
         config = load_persona("personas/kormoved/persona.yaml")
-        orchestrator = SalesBotOrchestratorV2(
+        orchestrator = SalesBotOrchestrator(
             openrouter_api_key="test-key",
         )
         runtime = orchestrator._build_runtime(config)
-        
+
         assert runtime.anaphora is not None
         assert isinstance(runtime.anaphora, AnaphoraResolver)
 
     def test_build_runtime_greeting_policy_from_config(self):
         """Greeting policy should come from persona config."""
         config = load_persona("personas/kormoved/persona.yaml")
-        orchestrator = SalesBotOrchestratorV2(
+        orchestrator = SalesBotOrchestrator(
             openrouter_api_key="test-key",
         )
         runtime = orchestrator._build_runtime(config)
-        
+
         policy = runtime.composer.greeting_policy
         assert policy.enabled
         assert policy.greet_only_first_response
@@ -131,11 +131,11 @@ class TestOrchestratorBuildRuntime:
 class TestOrchestratorIntegration:
     def test_all_personas_build_successfully(self):
         """All 3 personas should build runtimes with new components."""
-        orchestrator = SalesBotOrchestratorV2(
+        orchestrator = SalesBotOrchestrator(
             openrouter_api_key="test-key",
         )
         configs = orchestrator.load_personas()
-        
+
         for config in configs:
             runtime = orchestrator._build_runtime(config)
             assert runtime.composer is not None, f"{config.name}: missing composer"

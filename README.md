@@ -12,12 +12,12 @@
 5. При переходе в ЛС — мягко продаёт продукт
 6. Его не банят за спам, потому что он не спамит — он эксперт
 
-## Архитектура (Canonical: v2 Multi-Persona)
+## Архитектура
 
 ```
 ┌─────────────────────────────────────────┐
-│         Orchestrator v2                 │
-│  (multi-persona swarm, canonical)       │
+│         Orchestrator                    │
+│  (multi-persona swarm, production)    │
 ├──────────┬──────────┬──────────┬───────┤
 │ Persona 1│ Persona 2│ Persona 3│  ...  │
 │ Кормовед │ Фитнес   │ SMM      │       │
@@ -43,13 +43,13 @@
 └────────┬────────┘
          ↓
 ┌─────────────────┐
-│  Fast Router     │  (Gemini Flash — дёшево и быстро)
-│  Отвечать? Нет?  │
+│  Fast Router    │  (Gemini Flash — дёшево и быстро)
+│  Отвечать? Нет? │
 └────────┬────────┘
          ↓ (если да)
 ┌─────────────────┐
-│  Slow Generator  │  (Claude — качественно)
-│  Генерит ответ   │  ← persona.yaml + память юзера
+│  Slow Generator │  (Claude — качественно)
+│  Генерит ответ  │  ← persona.yaml + память юзера
 └────────┬────────┘
          ↓
 ┌─────────────────┐
@@ -57,13 +57,13 @@
 └────────┬────────┘
          ↓
 ┌─────────────────┐
-│  Anti-Spam       │  (typing simulation, delays)
+│  Anti-Spam      │  (typing simulation, delays)
 └────────┬────────┘
          ↓
     Отправка → Память (SQLite)
 ```
 
-## YAML-конфигурация (Canonical Format)
+## YAML-конфигурация
 
 Каждая персона = отдельная директория в `personas/`:
 - `personas/<name>/persona.yaml` — полная конфигурация
@@ -83,7 +83,7 @@
 | Router | Gemini Flash | Дёшево, быстро, часто |
 | Generator | Claude Sonnet | Качественно, редко |
 
-## Быстрый старт (Canonical v2)
+## Быстрый старт
 
 ```bash
 pip install -r requirements.txt
@@ -93,11 +93,7 @@ export OPENROUTER_API_KEY="sk-or-..."
 export PERSONAS_DIR="./personas"
 export MEMORY_DIR="./data/memory"
 
-# Запуск (default v2)
-python -m src.main
-
-# Или явно
-export BOT_MODE=v2
+# Запуск
 python -m src.main
 ```
 
@@ -105,31 +101,28 @@ python -m src.main
 
 ```
 sales-bot-engine/
-├── personas/            # YAML-конфиги персонажей (canonical)
+├── personas/            # YAML-конфиги персонажей
 │   ├── kormoved/        # Продавец кормов
-│   ├── fitness/        # Фитнес-эксперт
-│   └── smm_blogger/    # SMM-специалист
+│   ├── fitness/         # Фитнес-эксперт
+│   └── smm_blogger/     # SMM-специалист
 ├── src/
-│   ├── core/           # Router, Orchestrator v2 (canonical)
-│   ├── monitors/       # Monitors (TG, VK)
-│   ├── responders/     # Generator, Composer
-│   ├── memory/         # User Memory (SQLite)
-│   └── contracts/      # Legacy contract loader
+│   ├── core/            # Router, Orchestrator
+│   ├── monitors/        # Monitors (TG, VK)
+│   ├── responders/      # Generator, Composer
+│   └── memory/          # User Memory (SQLite)
 ├── data/
-│   ├── memory/         # SQLite DBs per persona
-│   └── logs/           # Logs
+│   ├── memory/          # SQLite DBs per persona
+│   └── logs/            # Logs
 └── tests/
 ```
 
 ## Статус
 
-🚧 В активной разработке. См. `PLAN.md` для задач.
+🚧 В активной разработке. См. `ARCHITECTURE.md` и `MIGRATION.md`.
 
 ## Runtime Inventory
 
-- **Canonical:** `src/core/orchestrator_v2.py` — multi-persona, full pipeline
-- **Legacy:** `src/core/orchestrator_legacy.py` — single-persona, Bot API (BOT_MODE=v1)
-- **Experimental:** `src/core/orchestrator_v3.py` — not wired to production
+- **Production:** `src/core/orchestrator.py` — multi-persona, full pipeline
 
 ## Автор
 
