@@ -126,11 +126,17 @@ async def preprocess_node(state: PersonaState, config: RunnableConfig) -> dict:
 
 
 # ========================================
-# NODE 3: Semantic Retrieval
+# NODE 3: Semantic Retrieval (DEPRECATED - use parallel_retrieval_node)
 # ========================================
+# LEGACY: This node is kept for backward compatibility during migration.
+# The graph now uses parallel_retrieval_node which runs semantic retrieval
+# and anaphora resolution concurrently via asyncio.gather.
+# This standalone node may be removed in a future version.
 
 async def semantic_retrieval_node(state: PersonaState, config: RunnableConfig) -> dict:
     """Fetch semantically relevant messages from vector DB.
+
+    DEPRECATED: Use parallel_retrieval_node instead for concurrent execution.
 
     Returns:
         {"semantic_context": [str]}
@@ -162,11 +168,17 @@ async def semantic_retrieval_node(state: PersonaState, config: RunnableConfig) -
 
 
 # ========================================
-# NODE 4: Anaphora Resolution
+# NODE 4: Anaphora Resolution (DEPRECATED - use parallel_retrieval_node)
 # ========================================
+# LEGACY: This node is kept for backward compatibility during migration.
+# The graph now uses parallel_retrieval_node which runs semantic retrieval
+# and anaphora resolution concurrently via asyncio.gather.
+# This standalone node may be removed in a future version.
 
 async def anaphora_node(state: PersonaState, config: RunnableConfig) -> dict:
     """Resolve anaphoric references (it, this, that, etc.).
+
+    DEPRECATED: Use parallel_retrieval_node instead for concurrent execution.
 
     Returns:
         {"resolved_question": str}

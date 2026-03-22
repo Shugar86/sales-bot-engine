@@ -749,6 +749,56 @@ class SupabaseMemory:
         results = await self.search_semantic(query, user_id, top_k=top_k)
         return [r["text"] for r in results]
 
+    async def search_semantic_group(
+        self,
+        query: str,
+        chat_id: str,
+        top_k: int = 5,
+        min_similarity: Optional[float] = None,
+    ) -> List[dict]:
+        """Search for semantically similar messages in a group chat.
+
+        Uses match_group_messages() SQL function which filters by chat_id
+        instead of user_id, allowing retrieval of group-wide context.
+
+        Args:
+            query: Text to search for
+            chat_id: Chat to filter by (group chat ID)
+            top_k: Maximum results
+            min_similarity: Minimum similarity threshold
+
+        Returns:
+            List of dicts with: text, role, similarity, ts
+        """
+        if not self._embedding_provider:
+            logger.warning("No embedding provider configured")
+            return []
+
+        # Compute query embedding
+        query_embedding = self._embedding_provider.encode(query)
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+        min_sim = min_similarity or self.config.min_similarity
+
+        rows = await self._fetch(
+            """
+            SELECT * FROM match_group_messages(
+                $1::vector(1024),
+                $2,
+                $3,
+                $4,
+                $5
+            )
+            """,
+            embedding_str,
+            self.persona_name,
+            chat_id,
+            top_k,
+            min_sim,
+        )
+
+        return [dict(row) for row in rows]
+
     # ========================================
     # STATS
     # ========================================

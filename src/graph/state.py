@@ -47,8 +47,8 @@ class PersonaState(TypedDict):
     emoji_to_send: Optional[str]
     """Emoji reaction to send (if route_decision == 'emoji')."""
 
-    semantic_context: Annotated[list[str], _add_to_list]
-    """Relevant historical messages from semantic search."""
+    semantic_context: list[str]
+    """Relevant historical messages from semantic search (fresh per request, no reducer needed)."""
 
     generated_text: Optional[str]
     """Raw generated response text."""
