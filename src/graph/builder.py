@@ -71,7 +71,7 @@ def build_persona_graph(runtime: Any) -> StateGraph:
     """Build the processing graph for a persona.
 
     Pipeline:
-        dedup -> preprocess -> [semantic_retrieval, anaphora] -> route ->
+        dedup -> preprocess -> parallel_retrieval -> route ->
         antispam -> generate -> validate -> send -> memory
 
     With shortcuts:
@@ -83,7 +83,7 @@ def build_persona_graph(runtime: Any) -> StateGraph:
         runtime: PersonaRuntime with all components configured
 
     Returns:
-        Compiled StateGraph
+        Configured StateGraph (not yet compiled)
     """
     # Create the graph
     workflow = StateGraph(PersonaState)

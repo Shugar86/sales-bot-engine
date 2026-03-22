@@ -44,19 +44,7 @@ def after_preprocess(state: PersonaState) -> str:
 
 
 # ========================================
-# EDGE 3: After Parallel Retrieval
-# ========================================
-
-def after_retrieval(state: PersonaState) -> str:
-    """Route after semantic retrieval and anaphora resolution.
-
-    Both branches converge here, continue to routing.
-    """
-    return "route"
-
-
-# ========================================
-# EDGE 4: After Routing
+# EDGE 3: After Routing
 # ========================================
 
 def after_route(state: PersonaState) -> str:

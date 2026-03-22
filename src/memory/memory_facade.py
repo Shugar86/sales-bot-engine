@@ -309,6 +309,33 @@ class MemoryFacade:
             min_similarity=min_similarity,
         )
 
+    async def search_semantic_group(
+        self,
+        query: str,
+        chat_id: str,
+        top_k: int = 5,
+        min_similarity: Optional[float] = None,
+    ) -> List[dict]:
+        """Search for semantically similar messages in a group chat.
+
+        Uses match_group_messages() which filters by chat_id instead of user_id.
+
+        Args:
+            query: Search query text
+            chat_id: Group chat to search in
+            top_k: Maximum results
+            min_similarity: Minimum similarity threshold
+
+        Returns:
+            List of dicts with: text, role, similarity, ts
+        """
+        return await self.memory.search_semantic_group(
+            query=query,
+            chat_id=chat_id,
+            top_k=top_k,
+            min_similarity=min_similarity,
+        )
+
     async def get_semantic_context(
         self, query: str, user_id: str, top_k: int = 3
     ) -> List[str]:
