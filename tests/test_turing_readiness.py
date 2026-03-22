@@ -279,14 +279,15 @@ class TestMemoryAndContext:
         vibe = detect_chat_vibe(["Грустно", "Тяжело", "Депрессия"])
         assert vibe.primary_vibe == ChatVibe.SAD
     
-    def test_response_deduplication(self):
+    @pytest.mark.asyncio
+    async def test_response_deduplication(self):
         """Bot should not repeat the same response."""
         with tempfile.TemporaryDirectory() as tmpdir:
             store = DeduplicationStore(
                 storage_path=os.path.join(tmpdir, "dedup.json")
             )
-            store.record_bot_response("c1", "Рекомендую корм на ягнёнке")
-            
+            await store.record_bot_response("c1", "Рекомендую корм на ягнёнке")
+
             assert store.is_repeating_response(
                 "c1", "Рекомендую корм на ягнёнке для аллергиков",
                 similarity_threshold=0.5

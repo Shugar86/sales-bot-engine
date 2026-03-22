@@ -180,8 +180,9 @@ class TestDedupSQLite:
         db_path = storage_path.with_suffix(".db")
         assert db_path.exists()
 
-    def test_concurrent_safety(self, tmp_path):
-        """SQLite backend should handle concurrent access."""
+    @pytest.mark.asyncio
+    async def test_concurrent_safety(self, tmp_path):
+        """SQLite backend should handle concurrent access with async lock."""
         import sqlite3
         from src.utils.dedup import DeduplicationStore
 
@@ -190,21 +191,22 @@ class TestDedupSQLite:
         store2 = DeduplicationStore(storage_path=str(storage_path))
 
         # Both should be able to write
-        store1.mark_processed("chat1", 1, "hello")
-        store2.mark_processed("chat1", 2, "world")
+        await store1.mark_processed("chat1", 1, "hello")
+        await store2.mark_processed("chat1", 2, "world")
 
         # Both should see the data
         assert store1.is_processed("chat1", 1, "hello")
         assert store2.is_processed("chat1", 2, "world")
 
-    def test_message_hash_consistency(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_message_hash_consistency(self, tmp_path):
         """Same message should produce same hash."""
         from src.utils.dedup import DeduplicationStore
 
         store = DeduplicationStore(storage_path=str(tmp_path / "test.json"))
 
         # Mark as processed
-        store.mark_processed("chat1", 1, "hello world")
+        await store.mark_processed("chat1", 1, "hello world")
 
         # Same message should be detected as processed
         assert store.is_processed("chat1", 1, "hello world")
@@ -212,7 +214,8 @@ class TestDedupSQLite:
         # Different message should not be processed
         assert not store.is_processed("chat1", 2, "different text")
 
-    def test_cleanup_old_entries(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_cleanup_old_entries(self, tmp_path):
         """Should cleanup entries older than max_age_hours."""
         import time
         from src.utils.dedup import DeduplicationStore
@@ -223,7 +226,7 @@ class TestDedupSQLite:
         )
 
         # Add an entry
-        store.mark_processed("chat1", 1, "test")
+        await store.mark_processed("chat1", 1, "test")
         assert store.is_processed("chat1", 1, "test")
 
         # Force cleanup

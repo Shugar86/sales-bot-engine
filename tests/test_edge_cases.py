@@ -89,22 +89,23 @@ class TestBotToBotDetection:
         result = humanizer.humanize(bot_text, is_casual=True)
         assert isinstance(result, str)
     
-    def test_repeated_response_pattern(self):
+    @pytest.mark.asyncio
+    async def test_repeated_response_pattern(self):
         """Bot repeating similar responses is detectable."""
         from src.utils.dedup import DeduplicationStore
         import tempfile
         import os
-        
+
         with tempfile.TemporaryDirectory() as tmpdir:
             store = DeduplicationStore(
                 storage_path=os.path.join(tmpdir, "dedup.json")
             )
-            
+
             # Bot sends same response
-            store.record_bot_response("c1", "Рекомендую корм на ягнёнке")
-            store.record_bot_response("c1", "Рекомендую корм на ягнёнке для аллергиков")
-            store.record_bot_response("c1", "Рекомендую гипоаллергенный корм на ягнёнке")
-            
+            await store.record_bot_response("c1", "Рекомендую корм на ягнёнке")
+            await store.record_bot_response("c1", "Рекомендую корм на ягнёнке для аллергиков")
+            await store.record_bot_response("c1", "Рекомендую гипоаллергенный корм на ягнёнке")
+
             # New similar response should be detected
             assert store.is_repeating_response(
                 "c1",

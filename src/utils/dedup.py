@@ -5,6 +5,7 @@ Tracks processed messages to avoid duplicate responses.
 Also tracks chat activity and recent responses for anti-spam.
 """
 
+import asyncio
 import hashlib
 import sqlite3
 import time
@@ -41,11 +42,15 @@ class DeduplicationStore:
     # SQLite connection (lazy init)
     _db_path: str = None
     _connection: Optional[sqlite3.Connection] = None
+    _write_lock: asyncio.Lock = None
 
     def __post_init__(self):
         # Convert storage path to DB path (same dir, .db extension)
         storage = Path(self.storage_path)
         self._db_path = str(storage.parent / (storage.stem + ".db"))
+
+        # Initialize async lock for concurrent safety
+        self._write_lock = asyncio.Lock()
 
         # Initialize SQLite tables
         self._init_db()
@@ -133,25 +138,26 @@ class DeduplicationStore:
             # Fail safe: assume processed to avoid duplicate
             return True
 
-    def mark_processed(self, chat_id: str, message_id: int, text: str):
+    async def mark_processed(self, chat_id: str, message_id: int, text: str):
         """Mark message as processed."""
         h = self._hash_message(chat_id, message_id, text)
 
-        try:
-            conn = self._get_connection()
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO processed_messages
-                (message_hash, chat_id, message_id, text_preview, processed_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (h, chat_id, message_id, text[:100], time.time())
-            )
-            conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"Database error in mark_processed: {e}")
+        async with self._write_lock:
+            try:
+                conn = self._get_connection()
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO processed_messages
+                    (message_hash, chat_id, message_id, text_preview, processed_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (h, chat_id, message_id, text[:100], time.time())
+                )
+                conn.commit()
+            except sqlite3.Error as e:
+                logger.error(f"Database error in mark_processed: {e}")
 
-    def record_bot_response(self, chat_id: str, response_text: str = ""):
+    async def record_bot_response(self, chat_id: str, response_text: str = ""):
         """Record that the bot responded in a chat."""
         now = time.time()
         self._chat_activity[chat_id] = now
@@ -159,34 +165,35 @@ class DeduplicationStore:
         # Store in SQLite
         if response_text:
             response_hash = hashlib.sha256(response_text.encode()).hexdigest()[:16]
-            try:
-                conn = self._get_connection()
-                conn.execute(
-                    """
-                    INSERT INTO bot_responses
-                    (chat_id, response_hash, response_preview, responded_at)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (chat_id, response_hash, response_text[:200], now)
-                )
-                conn.commit()
-
-                # Cleanup old responses (keep last 10 per chat)
-                conn.execute(
-                    """
-                    DELETE FROM bot_responses
-                    WHERE id IN (
-                        SELECT id FROM bot_responses
-                        WHERE chat_id = ?
-                        ORDER BY responded_at DESC
-                        LIMIT -1 OFFSET 10
+            async with self._write_lock:
+                try:
+                    conn = self._get_connection()
+                    conn.execute(
+                        """
+                        INSERT INTO bot_responses
+                        (chat_id, response_hash, response_preview, responded_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (chat_id, response_hash, response_text[:200], now)
                     )
-                    """,
-                    (chat_id,)
-                )
-                conn.commit()
-            except sqlite3.Error as e:
-                logger.error(f"Database error in record_bot_response: {e}")
+                    conn.commit()
+
+                    # Cleanup old responses (keep last 10 per chat)
+                    conn.execute(
+                        """
+                        DELETE FROM bot_responses
+                        WHERE id IN (
+                            SELECT id FROM bot_responses
+                            WHERE chat_id = ?
+                            ORDER BY responded_at DESC
+                            LIMIT -1 OFFSET 10
+                        )
+                        """,
+                        (chat_id,)
+                    )
+                    conn.commit()
+                except sqlite3.Error as e:
+                    logger.error(f"Database error in record_bot_response: {e}")
 
         # Update in-memory cache
         if response_text:

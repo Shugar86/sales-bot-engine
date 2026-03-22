@@ -56,6 +56,16 @@ services:
       - KORMOVED_VK_TOKEN=${KORMOVED_VK_TOKEN:-}
       - FITBRO_VK_TOKEN=${FITBRO_VK_TOKEN:-}
 
+      # === Supabase / PostgreSQL ===
+      - DATABASE_URL=${DATABASE_URL:-}
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_KEY=${SUPABASE_KEY:-}
+
+      # === Embeddings ===
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-deepvk/USER-bge-m3}
+      - EMBEDDING_DEVICE=${EMBEDDING_DEVICE:-cpu}
+      - EMBEDDING_CACHE_SIZE=${EMBEDDING_CACHE_SIZE:-512}
+
     volumes:
       # Personas configs (read-only)
       - ./personas:/app/personas:ro

@@ -4,19 +4,21 @@ Orchestrator — Multi-Persona Sales Bot (Production)
 Manages N personas running in parallel.
 Each persona = 1 YAML contract + 1 platform account + 1 set of components.
 
-Pipeline per message:
-  Monitor → IncomingMessage → Dedup → Preprocess → Anaphora → Router → Generator →
-  Output Validation → AntiSpam → Send → Memory
+Pipeline per message (LangGraph state machine):
+  dedup → preprocess → [semantic_retrieval, anaphora] → route →
+  antispam → generate → validate → send → memory
 
 This is the unified production orchestrator, consolidating v1/v2/v3 into a single
 maintainable architecture. Telegram-first, multi-persona, with full reliability features.
+
+New: LangGraph-based state machine with Supabase PostgreSQL persistence.
 """
 
 import asyncio
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from ..core.lifecycle import LifecycleManager, PersonaSupervisor, SupervisorConfig
 from ..core.persona_manager import PersonaConfig, PersonaManager, discover_personas
@@ -24,28 +26,28 @@ from ..core.router import MessageRouter, Decision, RouteResult
 from ..core.output_validators import OutputValidator, ValidationResult
 from ..core.prompt_compiler import PromptCompiler
 from ..core.vibe_schema import VibePersona, VibeBehavior, ResponseExample, GreetingPolicy as SchemaGreetingPolicy
+from ..graph.builder import build_config, compile_persona_graph
+from ..graph.state import build_initial_state
+from ..memory.memory_facade import MemoryFacade
 from ..responders.generator import ResponseGenerator, GeneratedResponse
 from ..monitors.telegram_userbot import TelegramUserbot, UserbotMessage
 from ..monitors.telegram_monitor import TelegramMonitor, TelegramMessage
 from ..monitors.vk_monitor import VKMonitorAsync, VKMessage
 from ..monitors.anti_spam import RateLimiter, TypingSpeedCalculator
 from ..monitors.base import PlatformMonitor
-from ..memory.user_memory import UserMemoryStore
 from ..responders.text_humanizer import humanize_text
-from ..responders.chat_vibe import detect_chat_vibe, VibeAnalysis
+from ..responders.chat_vibe import detect_chat_vibe
 from ..responders.response_composer import (
     ResponseComposer,
-    CompositionContext,
     GreetingPolicy,
-    is_pure_greeting,
     looks_like_greeting,
 )
-from ..responders.preprocess import PreprocessNode, PreprocessResult
+from ..responders.preprocess import PreprocessNode
 from ..responders.anaphora_resolver import AnaphoraResolver
 from ..utils.dedup import DeduplicationStore
 from ..utils.llm_client import LLMClient
 from ..utils.logger import get_logger
-from ..models.message import IncomingMessage, Platform
+from ..models.message import IncomingMessage
 
 logger = get_logger("orchestrator")
 
@@ -72,13 +74,14 @@ class PersonaRuntime:
     router: MessageRouter
     generator: ResponseGenerator
     antispam: RateLimiter
-    memory: UserMemoryStore
-    dedup: DeduplicationStore
+    memory: MemoryFacade  # NEW: Unified Supabase+embeddings facade
+    dedup: DeduplicationStore  # Kept for backward compatibility during migration
     composer: ResponseComposer = None  # Response composer (greeting, formatting)
     preprocessor: PreprocessNode = None  # Deterministic shortcuts
     anaphora: AnaphoraResolver = None  # Context anaphora resolution
     output_validator: OutputValidator = None  # Post-generation output validation
     monitor: Optional[PlatformMonitor] = None  # TelegramUserbot | TelegramMonitor | VKMonitorAsync
+    graph: Optional[Any] = None  # NEW: Compiled LangGraph
     state: BotState = BotState.IDLE
     stats: dict = field(default_factory=lambda: {
         "messages_processed": 0,
@@ -127,7 +130,7 @@ class SalesBotOrchestrator:
         logger.info(f"Discovered {len(configs)} personas in {self.personas_dir}")
         return configs
 
-    def _build_runtime(self, config: PersonaConfig) -> PersonaRuntime:
+    async def _build_runtime(self, config: PersonaConfig) -> PersonaRuntime:
         """Build runtime components for a persona."""
         import time
 
@@ -185,14 +188,11 @@ class SalesBotOrchestrator:
             cooldown_sec=config.anti_spam.min_delay_between_messages,
         )
 
-        # Memory (per-persona directory, persona-aware entity extraction)
-        persona_memory_dir = os.path.join(self.memory_dir, config.name.lower().replace(" ", "_"))
-        memory = UserMemoryStore(
-            memory_dir=persona_memory_dir,
-            persona_name=config.name,
-        )
+        # NEW: Memory Facade (Supabase + embeddings)
+        memory = await MemoryFacade.create(persona_name=config.name)
 
-        # Dedup
+        # Dedup (kept during migration period)
+        persona_memory_dir = os.path.join(self.memory_dir, config.name.lower().replace(" ", "_"))
         dedup = DeduplicationStore(
             storage_path=os.path.join(persona_memory_dir, "processed_messages.json")
         )
@@ -245,6 +245,7 @@ class SalesBotOrchestrator:
         # Anaphora Resolver (context memory)
         anaphora = AnaphoraResolver(max_contexts=500)
 
+        # Build runtime
         runtime = PersonaRuntime(
             config=config,
             llm=llm,
@@ -259,6 +260,15 @@ class SalesBotOrchestrator:
             output_validator=output_validator,
         )
         runtime.stats["started_at"] = time.time()
+
+        # Compile LangGraph for this persona
+        try:
+            runtime.graph = await compile_persona_graph(runtime)
+            logger.info(f"Compiled LangGraph for {config.name}")
+        except Exception as e:
+            logger.error(f"Failed to compile graph for {config.name}: {e}")
+            # Continue without graph - will use fallback _handle_message_legacy
+
         return runtime
 
     def _build_router_contract(self, config: PersonaConfig) -> dict:
@@ -269,7 +279,7 @@ class SalesBotOrchestrator:
         respond_to = []
         for trigger in config.respond_triggers:
             respond_to.append({
-                "context": ", ".join(trigger.keywords[:3]) if trigger.keywords else "general",
+                "context": ", ".join(trigger.keywords) if trigger.keywords else "general",
                 "keywords": trigger.keywords,
                 "topics": trigger.topics,
             })
@@ -333,9 +343,10 @@ class SalesBotOrchestrator:
 
     async def _handle_message(self, msg: IncomingMessage, runtime: PersonaRuntime):
         """
-        Process one message through the full pipeline.
+        Process one message through the LangGraph pipeline.
 
-        Pipeline: Dedup → Preprocess → Anaphora → Route → Generate → Compose → AntiSpam → Send → Memory
+        Uses compiled graph with PostgresSaver for state persistence.
+        Thread ID: "{persona_name}:{user_id}:{chat_id}"
         """
         import time
 
@@ -343,243 +354,115 @@ class SalesBotOrchestrator:
         runtime.stats["messages_processed"] += 1
         runtime.stats["last_message_at"] = time.time()
 
-        # === DEDUP ===
-        if runtime.dedup.is_processed(msg.chat_id, msg.message_id, msg.text):
-            logger.debug(f"[{runtime.config.name}] Skipping duplicate: {msg.message_id}")
+        # Build thread ID for state isolation
+        thread_id = f"{runtime.config.name}:{msg.user_id}:{msg.chat_id}"
+
+        # Build initial state
+        initial_state = build_initial_state(msg)
+
+        # Build config with runtime dependencies
+        config = build_config(runtime, thread_id)
+
+        try:
+            # Run the graph
+            if runtime.graph:
+                final_state = await runtime.graph.ainvoke(initial_state, config=config)
+
+                # Update stats based on results
+                if final_state.get("sent"):
+                    runtime.stats["responses_sent"] += 1
+                elif final_state.get("route_decision") == "ignore":
+                    runtime.stats["ignored"] += 1
+
+                # Log any errors
+                if final_state.get("error_message"):
+                    runtime.stats["errors"] += 1
+                    logger.error(f"[{runtime.config.name}] Graph error: {final_state['error_message']}")
+
+                # Log node history for debugging
+                node_history = final_state.get("node_history", [])
+                logger.debug(f"[{runtime.config.name}] Path: {' -> '.join(node_history)}")
+            else:
+                # Fallback: use legacy handler if graph not compiled
+                logger.warning(f"[{runtime.config.name}] No graph available, using legacy handler")
+                await self._handle_message_legacy(msg, runtime)
+
+        except Exception as e:
+            logger.error(f"[{runtime.config.name}] Graph invocation error: {e}")
+            runtime.stats["errors"] += 1
+            # Try to at least mark as processed
+            try:
+                await runtime.memory.mark_processed(msg.chat_id, msg.message_id, msg.text)
+            except Exception:
+                pass
+
+        finally:
+            runtime.state = BotState.IDLE
+
+    async def _handle_message_legacy(self, msg: IncomingMessage, runtime: PersonaRuntime):
+        """Legacy handler for fallback when graph is not available.
+
+        Simplified version of the original linear pipeline.
+        """
+        # Quick dedup check
+        is_dup = await runtime.memory.is_processed(msg.chat_id, msg.message_id, msg.text)
+        if is_dup:
             return
 
-        # === PREPROCESS (deterministic shortcuts) ===
-        last_context = {
-            "last_tool_name": runtime.memory.get_last_tool(msg.user_id),
-            "last_tool_args": runtime.memory.get_last_tool_args(msg.user_id),
-        }
+        # Mark processed
+        await runtime.memory.mark_processed(msg.chat_id, msg.message_id, msg.text)
 
-        is_first = runtime.memory.is_first_response(msg.user_id, msg.chat_id)
-        user_greeted = looks_like_greeting(msg.text) if msg.text else False
-
-        preprocess_result = runtime.preprocessor.process(
-            question=msg.text or "",
-            last_context=last_context,
-            is_first_response=is_first,
-            user_greeted=user_greeted,
-            is_dm=msg.is_dm,
-        )
-
-        if preprocess_result.has_shortcut:
-            runtime.stats["preprocess_shortcuts"] += 1
-
-            if preprocess_result.skip_generation:
-                logger.debug(f"[{runtime.config.name}] Preprocess: skip (trivial)")
-                runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
-                runtime.state = BotState.IDLE
-                return
-
-            if preprocess_result.shortcut_response:
-                logger.info(f"[{runtime.config.name}] Preprocess: shortcut → {preprocess_result.pipeline_step}")
-                runtime.stats["greeting_skips"] += 1
-                sent = await self._send_response(runtime, msg, preprocess_result.shortcut_response)
-                if sent:
-                    runtime.stats["responses_sent"] += 1
-                    runtime.antispam.record_send(msg.chat_id)
-                    runtime.dedup.record_bot_response(msg.chat_id, preprocess_result.shortcut_response)
-                runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
-                runtime.state = BotState.IDLE
-                return
-
-        # === ANAPHORA RESOLUTION ===
-        anaphora_result = runtime.anaphora.resolve(
-            user_id=str(msg.user_id),
-            chat_id=str(msg.chat_id),
-            question=msg.text or "",
-        )
-
-        # === ROUTING ===
-        runtime.state = BotState.ROUTING
-
-        chat_context = runtime.memory.get_recent_messages(msg.chat_id, limit=3)
-
+        # Simple routing
         route_result = await runtime.router.route(
-            message_text=msg.text,
-            chat_context=chat_context,
+            message_text=msg.text or "",
+            chat_context=[],
             is_dm=msg.is_dm,
-        )
-
-        logger.info(
-            f"[{runtime.config.name}] Route: {route_result.decision.value} "
-            f"(conf={route_result.confidence:.1f}, reason={route_result.reason})"
         )
 
         if route_result.decision == Decision.IGNORE:
             runtime.stats["ignored"] += 1
-            runtime.state = BotState.IDLE
-            runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
             return
 
-        # === LEAVE ON READ ===
-        if not msg.is_dm and runtime.antispam.should_leave_on_read():
-            logger.debug(f"[{runtime.config.name}] Leave on read: {msg.message_id}")
-            runtime.stats["ignored"] += 1
-            runtime.state = BotState.IDLE
-            runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
-            return
-
-        # === EMOJI REACTION ===
-        if not msg.is_dm and runtime.antispam.should_use_emoji_reaction():
-            emoji = runtime.antispam.get_emoji_reaction(msg.text)
-            if emoji:
-                logger.info(f"[{runtime.config.name}] Emoji reaction: {emoji} to {msg.message_id}")
-                await self._send_emoji_reaction(runtime, msg, emoji)
-                runtime.stats["responses_sent"] += 1
-                runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
-                runtime.state = BotState.IDLE
-                return
-
-        # === GENERATION ===
-        runtime.state = BotState.GENERATING
-
-        response: Optional[GeneratedResponse] = None
-
+        # Generate response
         try:
             if msg.is_dm:
-                user_memory = runtime.memory.get_user_context(msg.user_id)
-                group_context = runtime.memory.get_group_context_for_user(msg.user_id)
-
-                # Auto-analyze funnel signals
-                funnel_stage = runtime.memory.analyze_funnel_signals(msg.user_id, msg.text)
-                current_stage = runtime.memory.get_funnel_stage(msg.user_id)
-                effective_stage = funnel_stage if funnel_stage != current_stage else current_stage
-
-                # Include previous recommendations to avoid repetition
-                prev_recs = runtime.memory.get_recommendations(msg.user_id)
-                if prev_recs:
-                    user_memory += f"\nУже рекомендовал: {'; '.join(prev_recs[-3:])}"
-
+                user_context = await runtime.memory.get_user_context(msg.user_id)
                 response = await runtime.generator.generate_dm_response(
-                    message_text=msg.text,
-                    user_memory=user_memory,
+                    message_text=msg.text or "",
+                    user_memory=user_context,
                     dm_history="",
-                    group_context=group_context,
-                    funnel_stage=effective_stage,
+                    group_context="",
+                    funnel_stage="unknown",
                 )
             else:
-                # Detect chat vibe from recent context
-                recent_msgs = runtime.dedup.get_recent_texts(msg.chat_id, limit=10)
-                chat_vibe = detect_chat_vibe(recent_msgs) if recent_msgs else None
-
                 response = await runtime.generator.generate_group_response(
-                    message_text=msg.text,
-                    chat_context=chat_context,
-                    chat_vibe=chat_vibe,
+                    message_text=msg.text or "",
+                    chat_context=[],
+                    chat_vibe=None,
                 )
+
+            if response and response.text:
+                # Send
+                kwargs = {"chat_id": msg.chat_id}
+                if not msg.is_dm:
+                    kwargs["reply_to"] = msg.message_id
+
+                success = await runtime.monitor.send_message(text=response.text, **kwargs)
+
+                if success:
+                    runtime.stats["responses_sent"] += 1
+                    # Record to memory
+                    await runtime.memory.record_dm(
+                        user_id=msg.user_id,
+                        username=msg.username,
+                        display_name=msg.display_name,
+                        message=msg.text or "",
+                        response=response.text,
+                        stage="unknown",
+                    )
+
         except Exception as e:
-            logger.error(f"[{runtime.config.name}] Generation error: {e}")
-            runtime.stats["errors"] += 1
-            runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
-            runtime.state = BotState.IDLE
-            return
-
-        if not response or not response.text:
-            logger.info(f"[{runtime.config.name}] No response for {msg.message_id}")
-            runtime.state = BotState.IDLE
-            runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
-            return
-
-        # === OUTPUT VALIDATION ===
-        if runtime.output_validator:
-            is_first = runtime.memory.is_first_response(msg.user_id, msg.chat_id)
-            user_greeted = looks_like_greeting(msg.text) if msg.text else False
-            validation = runtime.output_validator.validate(
-                text=response.text,
-                is_first_response=is_first,
-                user_greeted=user_greeted,
-            )
-            if validation.violations:
-                logger.warning(
-                    f"[{runtime.config.name}] Output violations: {validation.violations}"
-                )
-                runtime.stats["validator_fixes"] += 1
-            response.text = validation.cleaned_text
-            if not response.text:
-                logger.info(f"[{runtime.config.name}] Validator cleared response for {msg.message_id}")
-                runtime.state = BotState.IDLE
-                runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
-                return
-
-        # === SENDING ===
-        runtime.state = BotState.SENDING
-
-        can_send, reason = runtime.antispam.can_send(msg.chat_id)
-
-        sent = False
-        if can_send:
-            delay = runtime.antispam.get_random_delay()
-            logger.debug(f"[{runtime.config.name}] Anti-spam delay: {delay:.1f}s")
-            await asyncio.sleep(delay)
-
-            # Re-check after delay
-            can_send, reason = runtime.antispam.can_send(msg.chat_id)
-            if can_send:
-                # Apply text humanization
-                send_text = response.text
-                if runtime.config.anti_spam.random_typos:
-                    is_casual = response.tone in ("casual", "humor")
-                    send_text = humanize_text(send_text, is_casual=is_casual)
-
-                # Check if repeating
-                if runtime.dedup.is_repeating_response(msg.chat_id, send_text):
-                    logger.info(f"[{runtime.config.name}] Skipping repeat response in {msg.chat_id}")
-                    runtime.stats["ignored"] += 1
-                else:
-                    # === TYPING INDICATOR ===
-                    if runtime.config.anti_spam.typing_simulation:
-                        typing_calc = TypingSpeedCalculator()
-                        typing_time = typing_calc.estimate_typing_time(send_text)
-                        try:
-                            if hasattr(runtime.monitor, 'send_typing'):
-                                await runtime.monitor.send_typing(msg.chat_id)
-                        except Exception:
-                            pass
-                        await asyncio.sleep(min(typing_time, 15.0))
-
-                    sent = await self._send_response(runtime, msg, send_text)
-                    if sent:
-                        runtime.antispam.record_send(msg.chat_id)
-                        runtime.dedup.record_bot_response(msg.chat_id, send_text)
-            else:
-                logger.warning(f"[{runtime.config.name}] Blocked after delay: {reason}")
-        else:
-            logger.warning(f"[{runtime.config.name}] Anti-spam blocked: {reason}")
-
-        if sent:
-            runtime.stats["responses_sent"] += 1
-
-            # === MEMORY ===
-            runtime.state = BotState.MEMORY_UPDATE
-
-            if msg.is_dm:
-                runtime.memory.record_dm(
-                    user_id=msg.user_id,
-                    username=msg.username,
-                    display_name=msg.display_name,
-                    message=msg.text,
-                    response=response.text,
-                    stage=response.stage,
-                )
-            else:
-                runtime.memory.record_group_message(
-                    user_id=msg.user_id,
-                    username=msg.username,
-                    display_name=msg.display_name,
-                    chat_id=msg.chat_id,
-                    chat_title=msg.chat_title,
-                    message=msg.text,
-                )
-
-            for note in response.remember:
-                runtime.memory.add_note(msg.user_id, note)
-
-        runtime.dedup.mark_processed(msg.chat_id, msg.message_id, msg.text)
-        runtime.state = BotState.IDLE
+            logger.error(f"[{runtime.config.name}] Legacy handler error: {e}")
 
     async def _send_response(
         self,
@@ -623,21 +506,11 @@ class SalesBotOrchestrator:
             config = runtime.config
 
             if config.platform == "telegram" and isinstance(monitor, TelegramUserbot):
-                try:
-                    from telethon.tl.functions.messages import SendReactionRequest
-                    from telethon.tl.types import ReactionEmoji
-                    await monitor.client(SendReactionRequest(
-                        peer=int(msg.chat_id),
-                        msg_id=msg.message_id,
-                        reaction=[ReactionEmoji(emoticon=emoji)],
-                    ))
-                    return True
-                except ImportError:
-                    logger.debug("Telethon not available for reactions")
-                    return False
-                except Exception as e:
-                    logger.warning(f"Reaction failed: {e}")
-                    return False
+                return await monitor.send_reaction(
+                    chat_id=msg.chat_id,
+                    message_id=msg.message_id,
+                    emoji=emoji,
+                )
 
             return False
 
@@ -769,10 +642,10 @@ class SalesBotOrchestrator:
             logger.warning("No personas found! Nothing to run.")
             return
 
-        # Build runtimes
+        # Build runtimes (async)
         for config in configs:
             try:
-                runtime = self._build_runtime(config)
+                runtime = await self._build_runtime(config)
                 self.runtimes[config.name] = runtime
                 logger.info(f"Built runtime for: {config.name}")
             except Exception as e:
@@ -818,9 +691,9 @@ class SalesBotOrchestrator:
             except Exception as e:
                 logger.debug(f"[{name}] LLM close error: {e}")
 
-            # Close memory
+            # Close memory facade (Supabase connection pool)
             try:
-                runtime.memory.close()
+                await runtime.memory.close()
             except Exception as e:
                 logger.debug(f"[{name}] Memory close error: {e}")
 

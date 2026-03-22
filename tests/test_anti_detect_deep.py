@@ -156,41 +156,43 @@ class TestActivityBurstDetection:
 
 class TestConversationThreading:
     """Test conversation threading awareness."""
-    
-    def test_already_replied_detection(self):
+
+    @pytest.mark.asyncio
+    async def test_already_replied_detection(self):
         """Bot should detect if it already replied to a conversation."""
         from src.utils.dedup import DeduplicationStore
         import tempfile
         import os
-        
+
         with tempfile.TemporaryDirectory() as tmpdir:
             store = DeduplicationStore(
                 storage_path=os.path.join(tmpdir, "dedup.json")
             )
-            
+
             # Record a response
-            store.record_bot_response("chat1", "Рекомендую корм с ягнёнком")
-            
+            await store.record_bot_response("chat1", "Рекомендую корм с ягнёнком")
+
             # Similar response should be detected as repeat (lower threshold)
             assert store.is_repeating_response(
                 "chat1",
                 "Рекомендую корм с ягнёнком для аллергиков",
                 similarity_threshold=0.6
             ) is True
-    
-    def test_different_chat_not_repeating(self):
+
+    @pytest.mark.asyncio
+    async def test_different_chat_not_repeating(self):
         """Same response in different chat should not be flagged."""
         from src.utils.dedup import DeduplicationStore
         import tempfile
         import os
-        
+
         with tempfile.TemporaryDirectory() as tmpdir:
             store = DeduplicationStore(
                 storage_path=os.path.join(tmpdir, "dedup.json")
             )
-            
-            store.record_bot_response("chat1", "Хороший корм")
-            
+
+            await store.record_bot_response("chat1", "Хороший корм")
+
             assert store.is_repeating_response(
                 "chat2",
                 "Хороший корм"

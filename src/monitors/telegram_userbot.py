@@ -22,8 +22,6 @@ from ..core.retry import retry_with_backoff, TELEGRAM_SEND_POLICY
 
 logger = get_logger("telegram-userbot")
 
-logger = get_logger("telegram-userbot")
-
 # Telethon is optional — import gracefully
 try:
     from telethon import TelegramClient, events
