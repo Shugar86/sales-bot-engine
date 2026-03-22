@@ -50,6 +50,9 @@ class PersonaState(TypedDict):
     semantic_context: list[str]
     """Relevant historical messages from semantic search (fresh per request, no reducer needed)."""
 
+    chat_context: list[str]
+    """Recent chat messages for routing context (cached to avoid duplicate DB queries)."""
+
     generated_text: Optional[str]
     """Raw generated response text."""
 
@@ -110,6 +113,7 @@ def build_initial_state(msg: IncomingMessage) -> PersonaState:
         "route_decision": "",
         "emoji_to_send": None,
         "semantic_context": [],
+        "chat_context": [],
         "generated_text": None,
         "validated_text": None,
         "can_send": False,

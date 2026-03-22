@@ -228,12 +228,22 @@ async def parallel_retrieval_node(state: PersonaState, config: RunnableConfig) -
         if not msg.text:
             return []
         try:
-            results = await runtime.memory.search_semantic(
-                query=msg.text,
-                user_id=msg.user_id,
-                top_k=3,
-                min_similarity=0.6,
-            )
+            # DM: search by user_id for personal context
+            # Group: search by chat_id for group-wide context
+            if msg.is_dm:
+                results = await runtime.memory.search_semantic(
+                    query=msg.text,
+                    user_id=msg.user_id,
+                    top_k=3,
+                    min_similarity=0.6,
+                )
+            else:
+                results = await runtime.memory.search_semantic_group(
+                    query=msg.text,
+                    chat_id=msg.chat_id,
+                    top_k=3,
+                    min_similarity=0.6,
+                )
             return [r["text"] for r in results]
         except Exception as e:
             logger.warning(f"[{runtime.config.name}] Semantic search error: {e}")
@@ -286,15 +296,14 @@ async def route_node(state: PersonaState, config: RunnableConfig) -> dict:
     runtime = _get_runtime(config)
     msg: IncomingMessage = state["message"]
 
-    # Get recent chat context (single call, cached in state if needed)
-    # For now, fetch fresh - can be optimized to use state["semantic_context"]
-    recent_msgs = await runtime.memory.get_recent_messages(msg.chat_id, limit=3)
+    # Get recent chat context (cached in state to avoid duplicate DB queries in generate_node)
+    recent_msgs = await runtime.memory.get_recent_messages(msg.chat_id, limit=10)
     chat_context = [m["text"] for m in recent_msgs]
 
     # Route
     route_result = await runtime.router.route(
         message_text=state["resolved_question"] or msg.text,
-        chat_context=chat_context,
+        chat_context=chat_context[:3],  # Use top 3 for routing decision
         is_dm=msg.is_dm,
     )
 
@@ -304,13 +313,19 @@ async def route_node(state: PersonaState, config: RunnableConfig) -> dict:
         f"(conf={route_result.confidence:.1f}, reason={route_result.reason})"
     )
 
-    # Map to simplified decisions
+    # Map to simplified decisions, include chat_context for reuse in generate_node
+    result = {
+        "route_decision": "",
+        "chat_context": chat_context,  # Cache for generate_node to avoid duplicate query
+        "node_history": ["route"],
+    }
     if route_result.decision == Decision.IGNORE:
-        return {"route_decision": "ignore", "node_history": ["route"]}
+        result["route_decision"] = "ignore"
     elif route_result.decision == Decision.RESPOND:
-        return {"route_decision": "respond", "node_history": ["route"]}
+        result["route_decision"] = "respond"
     else:
-        return {"route_decision": "emoji", "node_history": ["route"]}
+        result["route_decision"] = "emoji"
+    return result
 
 
 # ========================================
@@ -406,17 +421,21 @@ async def generate_node(state: PersonaState, config: RunnableConfig) -> dict:
                 funnel_stage=funnel_stage,
             )
         else:
-            # Group chat: Use chat vibe + recent context
-            recent_texts = await runtime.memory.get_recent_messages(
-                msg.chat_id, limit=10
-            )
+            # Group chat: Use chat vibe + recent context (reuse from route_node if available)
+            # Use cached chat_context from state to avoid duplicate DB query
+            chat_context = state.get("chat_context", [])
+            if not chat_context:
+                # Fallback: fetch fresh if not cached (shouldn't happen in normal flow)
+                recent_msgs = await runtime.memory.get_recent_messages(msg.chat_id, limit=10)
+                chat_context = [m["text"] for m in recent_msgs]
+
             from ..responders.chat_vibe import detect_chat_vibe
 
-            chat_vibe = detect_chat_vibe([t["text"] for t in recent_texts])
+            chat_vibe = detect_chat_vibe(chat_context)
 
             response = await runtime.generator.generate_group_response(
                 message_text=state["resolved_question"] or msg.text,
-                chat_context=[t["text"] for t in recent_texts[:3]],
+                chat_context=chat_context[:3],
                 chat_vibe=chat_vibe,
             )
 
