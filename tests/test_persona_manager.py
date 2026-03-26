@@ -237,6 +237,31 @@ class TestDiscoverPersonas:
         # Should not crash, just skip the broken one
         assert len(personas) == 0
 
+    def test_discover_loads_memory_entity_profile(self, tmp_path):
+        """New persona folders pick up ``memory.entity_profile`` without code changes."""
+        p_dir = tmp_path / "gamma_coach"
+        p_dir.mkdir()
+        with open(p_dir / "persona.yaml", "w", encoding="utf-8") as f:
+            yaml.dump(
+                {
+                    "persona": {
+                        "name": "Gamma",
+                        "platform": "telegram",
+                        "account_type": "userbot",
+                        "personality": "Coach",
+                        "memory": {"entity_profile": "dog"},
+                    }
+                },
+                f,
+                allow_unicode=True,
+            )
+        personas = discover_personas(str(tmp_path))
+        assert len(personas) == 1
+        assert personas[0].memory.entity_profile == "dog"
+        mgr = PersonaManager(personas_dir=str(tmp_path))
+        loaded = mgr.load_all()
+        assert loaded[0].memory.entity_profile == "dog"
+
 
 class TestPersonaManager:
     """Test PersonaManager class."""

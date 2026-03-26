@@ -10,7 +10,7 @@ class TestDMConversationFlow:
     
     def setup_method(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved")
+        self.memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved", entity_profile="dog")
     
     def test_dm_records_funnel_progression(self):
         """DM should progress funnel based on signals."""
@@ -115,7 +115,7 @@ class TestDMFunnelSignals:
     
     def setup_method(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved")
+        self.memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved", entity_profile="dog")
     
     def test_buying_signals(self):
         buying_messages = [

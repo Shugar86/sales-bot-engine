@@ -101,15 +101,21 @@ class AntiSpamConfig(BaseModel):
     night_end: int = 8
     typing_simulation: bool = True
     random_typos: bool = False
+    #: Макс. входящих DM подряд без исходящего ответа бота; следующее сообщение блокируется.
+    dm_max_inbound_burst_without_bot_reply: int = Field(default=3, ge=1, le=100)
 
     model_config = ConfigDict(extra="ignore")
 
 
 class MemoryConfig(BaseModel):
     """Конфигурация памяти."""
+
     remember: list[str] = Field(default_factory=list)
     reference_past: bool = True
     track_funnel: bool = True
+    #: ``dog`` | ``fitness`` | ``generic`` — какой эвристический экстрактор сущностей использовать
+    #: в SQLite UserMemoryStore (без правок кода при новой персоне).
+    entity_profile: str = "generic"
 
     model_config = ConfigDict(extra="ignore")
 

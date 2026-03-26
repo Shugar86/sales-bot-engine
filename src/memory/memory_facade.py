@@ -6,7 +6,7 @@ Provides a high-level API that:
 - Maintains backward compatibility with UserMemoryStore API
 
 Example:
-    facade = await MemoryFacade.create(persona_name="kormoved")
+    facade = await MemoryFacade.create(persona_name="my_bot")
 
     # Record interaction (embedding computed automatically)
     await facade.record_dm(
@@ -412,6 +412,22 @@ class MemoryFacade:
     ) -> List[dict]:
         """Get recent messages from a chat."""
         return await self.memory.get_recent_messages(chat_id, limit)
+
+    async def get_dm_transcript_for_prompt(self, user_id: str, max_chars: int = 1500) -> str:
+        """Recent DM thread text for the ``dm_history`` prompt slot (not profile metadata)."""
+        return await self.memory.get_dm_transcript_tail(user_id, max_chars=max_chars)
+
+    async def get_dm_inbound_streak(self, user_id: str) -> int:
+        """Inbound DM streak without a completed bot reply (persists in ``users.extra``)."""
+        return await self.memory.get_dm_inbound_streak(user_id)
+
+    async def increment_dm_inbound_streak(self, user_id: str) -> int:
+        """Increment streak when a DM is admitted past antispam."""
+        return await self.memory.increment_dm_inbound_streak(user_id)
+
+    async def reset_dm_inbound_streak(self, user_id: str) -> None:
+        """Reset streak after the bot successfully sends a DM."""
+        await self.memory.reset_dm_inbound_streak(user_id)
 
     # ========================================
     # Statistics & Maintenance

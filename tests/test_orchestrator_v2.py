@@ -458,6 +458,7 @@ class TestOrchestratorLegacyAndTrace:
         assert last["nodes"] == "dedup->route->send"
         assert last["user_id"] == "500"
         assert "latency_ms" in last
+        assert last.get("llm_error") is False
 
 
 class TestOrchestratorStatus:

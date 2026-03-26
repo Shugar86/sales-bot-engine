@@ -99,11 +99,16 @@ async def test_dm_graph_path_uses_real_router_sales_dm() -> None:
     memory.get_user_context = AsyncMock(return_value="")
     memory.get_recommendations = AsyncMock(return_value=[])
     memory.get_funnel_stage = AsyncMock(return_value="unknown")
+    memory.get_dm_transcript_for_prompt = AsyncMock(return_value="")
+    memory.set_funnel_stage = AsyncMock()
     memory.is_repeating_response = AsyncMock(return_value=False)
     memory.record_bot_response = AsyncMock()
     memory.record_dm = AsyncMock()
     memory.record_group_message = AsyncMock()
     memory.search_semantic = AsyncMock(return_value=[])
+    memory.get_dm_inbound_streak = AsyncMock(return_value=0)
+    memory.increment_dm_inbound_streak = AsyncMock(return_value=1)
+    memory.reset_dm_inbound_streak = AsyncMock()
 
     generator = AsyncMock()
     generator.generate_dm_response = AsyncMock(

@@ -1,5 +1,7 @@
 # Adding a platform
 
+For a new sales persona (YAML + env), see [PERSONA_EXTENSION.md](PERSONA_EXTENSION.md).
+
 Production messaging goes through **one** path: `PlatformAdapter` instances from `src/platforms/registry.py`.
 
 ## Minimal contract

@@ -168,31 +168,26 @@ class TestGeneratorBotDenial:
 
 
 class TestGeneratorFallback:
-    """Тесты fallback при ошибках LLM."""
-    
+    """При ошибке LLM генератор не шлёт случайный текст (Sprint 3)."""
+
     @pytest.mark.asyncio
-    async def test_group_llm_failure_fallback(self, generator, mock_llm):
-        """Ошибка LLM в группе → fallback ответ (не молчание)."""
+    async def test_group_llm_failure_returns_none(self, generator, mock_llm):
         mock_llm.call.return_value = MagicMock(text="", success=False, error="timeout")
-        
         result = await generator.generate_group_response("Тестовое сообщение")
-        
-        assert result is not None
-        assert result.text
-        assert len(result.text) > 5
-        # Fallback должен быть на русском
-        assert any(c in result.text for c in "абвгдежзиклмнопрстуфхцчшщэюя")
-    
+        assert result is None
+
     @pytest.mark.asyncio
-    async def test_dm_llm_failure_fallback(self, generator, mock_llm):
-        """Ошибка LLM в ЛС → fallback ответ (не молчание)."""
+    async def test_dm_llm_failure_returns_none(self, generator, mock_llm):
         mock_llm.call.return_value = MagicMock(text="", success=False, error="timeout")
-        
         result = await generator.generate_dm_response("Хочу купить корм")
-        
-        assert result is not None
-        assert result.text
-    
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_group_llm_exception_returns_none(self, generator, mock_llm):
+        mock_llm.call.side_effect = TimeoutError("boom")
+        result = await generator.generate_group_response("Тестовое сообщение")
+        assert result is None
+
     def test_parse_non_json_text(self, generator):
         """LLM вернул текст без JSON — парсим как есть."""
         result = generator._parse_response("Привет! Как дела? Это обычный текст.")
@@ -204,6 +199,41 @@ class TestGeneratorFallback:
         """Пустой текст → None."""
         result = generator._parse_response("")
         assert result is None
+
+
+class TestGeneratorPlainTextOutput:
+    """Финальный user-facing текст без JSON-артефактов (Sprint 3)."""
+
+    def test_plain_reply_has_no_json_markers(self, generator):
+        out = generator._parse_response("Да, для лабрадора бери корм с глюкозамином.")
+        assert out is not None
+        assert '"text"' not in out.text
+        assert "'text'" not in out.text
+        assert "{" not in out.text
+
+    def test_legacy_json_extracts_only_body(self, generator):
+        out = generator._parse_response(
+            '{"text": "Норм вариант, бери.", "tone": "expert", "stage": "help"}'
+        )
+        assert out is not None
+        assert out.text == "Норм вариант, бери."
+        assert '"text"' not in out.text
+
+    def test_silence_token_returns_none(self, generator):
+        assert generator._parse_response("__SILENCE__") is None
+        assert generator._parse_response("  __SILENCE__  \n") is None
+
+    @pytest.mark.asyncio
+    async def test_dm_llm_plain_text_no_artifacts(self, generator, mock_llm):
+        """После generate_dm ответ без полей вида \"text\":."""
+        mock_llm.call.return_value = MagicMock(
+            text="Смотри, у меня овчарка так же ела — попробуй сменить корм постепенно.",
+            success=True,
+        )
+        result = await generator.generate_dm_response("Собака не ест сухой корм")
+        assert result is not None
+        assert '"text"' not in result.text
+        assert not result.text.strip().startswith("{")
 
 
 class TestTuringTestScenarios:

@@ -16,6 +16,8 @@ The Sales Bot Engine is a multi-persona sales automation system that monitors Te
 - **Multi-persona**: Each persona runs in isolation with its own runtime, memory, and rate limits
 - **Human-like behavior**: Typing simulation, leave-on-read, emoji reactions, variable delays
 - **Turing test optimized**: Responses trained to avoid bot-like patterns
+- **Plain-text generation**: Slow model is prompted for user-facing message text (not JSON-first); post-processing strips legacy JSON artifacts when models misbehave.
+- **Persona drift guardrails**: `persona_yaml_validate.py` enforces semantic YAML rules in CI via pytest (see `tests/test_persona_yaml_schema.py`).
 
 ---
 
@@ -58,11 +60,12 @@ The Sales Bot Engine is a multi-persona sales automation system that monitors Te
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                   Per-Persona Runtime                           │
-│         (LangGraph; optional legacy linear fallback)             │
+│   LangGraph when DATABASE_URL set; legacy path only if unset    │
 ├─────────────────────────────────────────────────────────────────┤
 │  PlatformAdapter.run → IncomingMessage → LangGraph:             │
 │  Dedup → Preprocess → parallel_retrieval → Route →               │
-│  AntiSpam → Generate → Validate → Send (adapter) → Memory       │
+│  AntiSpam (incl. per-user DM inbound burst) → Generate →         │
+│  Validate → Send (adapter) → Memory (funnel heuristic)           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -74,11 +77,13 @@ The Sales Bot Engine is a multi-persona sales automation system that monitors Te
 
 | Module | Responsibility | Key Classes |
 |--------|---------------|-------------|
-| `orchestrator.py` | Main coordination, persona loading, LangGraph invoke | `SalesBotOrchestrator`, `PersonaRuntime` (`adapter`), `BotState` |
+| `orchestrator.py` | Main coordination, persona loading, LangGraph invoke; one JSON **message_trace** per handled message (`path`, `nodes`, `latency_ms`, `llm_error`, …) | `SalesBotOrchestrator`, `PersonaRuntime` (`adapter`), `BotState` |
 | `lifecycle.py` | Task supervision, restart policy, health tracking | `PersonaSupervisor`, `LifecycleManager`, `SupervisorConfig` |
-| `persona_manager.py` | YAML loading; `run_persona` uses same `create_adapter` as orchestrator | `PersonaConfig`, `discover_personas()` |
-| `router.py` | Fast routing decision (respond/ignore) | `MessageRouter`, `Decision` |
-| `generator.py` | Response generation with examples | `ResponseGenerator` |
+| `persona_manager.py` | YAML loading; `discover_personas`; optional `memory.entity_profile` for extractors | `PersonaConfig`, `discover_personas()` |
+| `funnel_heuristic.py` | DM funnel stage suggestion from current stage + user text (shared SQLite/Postgres semantics) | `suggest_funnel_stage()` |
+| `persona_yaml_validate.py` | Static + **semantic** persona YAML checks (errors/warnings) | `validate_all_personas_under()`, `assert_persona_yaml_file_valid()` |
+| `router.py` | Fast routing; invalid LLM decision → `RouteResult.parse_failed` (not silent ignore) | `MessageRouter`, `Decision` |
+| `generator.py` | Response generation; on LLM failure/timeout returns **`None`** (no random fallback text) | `ResponseGenerator` |
 | `retry.py` | Centralized retry/backoff/circuit breaker | `RetryManager`, `CircuitBreaker`, `RetryPolicy` |
 | `health.py` | Health probes and status reporting | `HealthChecker`, `HealthReporter` |
 
@@ -89,7 +94,7 @@ The Sales Bot Engine is a multi-persona sales automation system that monitors Te
 | `telegram_userbot.py` | Telethon-based monitoring | Reconnection, retry, graceful shutdown |
 | `telegram_monitor.py` | Bot API long polling | Offset persistence, 429 handling |
 | `vk_monitor.py` | VK API monitoring | Extension point (sync API) |
-| `anti_spam.py` | Rate limiting, delays | Per-persona limits, typing simulation |
+| `anti_spam.py` | Rate limiting, delays, outgoing send accounting | `RateLimiter`; per-user **DM inbound burst** is enforced in `graph/nodes.py` + persisted streak in memory (`users.extra.dm_inbound_streak`), threshold from `PersonaConfig.anti_spam.dm_max_inbound_burst_without_bot_reply` |
 
 ### Platform adapters (`src/platforms/`)
 
@@ -106,7 +111,11 @@ The orchestrator and LangGraph nodes depend only on `PlatformAdapter`, not on Te
 | Module | Responsibility | Storage |
 |--------|---------------|---------|
 | `dedup.py` | Message deduplication | SQLite (WAL mode) |
-| `user_memory.py` | User context, funnel tracking | SQLite (WAL mode) |
+| `user_memory.py` | User context, funnel, entity extraction by `memory.entity_profile` | SQLite (`users.extra` JSON) |
+| `supabase_memory.py` | Async user/DM/group memory, semantic search | PostgreSQL + optional pgvector |
+| `memory_facade.py` | Unified API for graph: context, `get_dm_transcript_for_prompt`, streak helpers, embeddings | Delegates to `SupabaseMemory` |
+
+**DM prompt context:** `generate_node` loads `funnel_stage` via `get_funnel_stage`, recommendations via `get_recommendations`, and a chronological thread tail via `get_dm_transcript_for_prompt` (not only the condensed profile block). After a reply, `memory_node` records the exchange and updates funnel stage using `funnel_heuristic.suggest_funnel_stage` (not the LLM’s `stage` field).
 
 ---
 
@@ -168,6 +177,10 @@ persona:
     min_delay_between_messages: 30
     leave_on_read: 0.35
     typing_simulation: true
+    dm_max_inbound_burst_without_bot_reply: 3  # optional; consecutive inbound DMs without bot send
+
+  memory:
+    entity_profile: generic   # optional: dog | fitness | generic (SQLite entity extractor)
 
   response_examples:
     - trigger: "Дорого"
@@ -196,10 +209,10 @@ persona:
 
 ### LLM Reliability
 
-- Response structure validation (no KeyError on malformed JSON)
-- Circuit breaker: Opens after 5 consecutive failures
-- Retry-After header support for 429
-- Per-call timeout override (router=fast, generator=slow)
+- **Router:** malformed or unknown `decision` from the fast model sets `parse_failed=True` on `RouteResult` (logged); not treated as a silent “ignore”.
+- **Generator:** LLM errors, timeouts, or `success=False` yield **`None`**; the graph does not send a placeholder reply. `generate_node` sets `llm_failed`; orchestrator trace includes `llm_error` when applicable.
+- **Legacy path** (no `DATABASE_URL`): same “no junk on LLM failure” behavior for the minimal route → generate → send flow.
+- Circuit breaker and retries remain on the HTTP client where configured; per-call timeouts differ (router=fast, generator=slow).
 
 ### State Persistence
 
@@ -257,10 +270,14 @@ docker compose logs -f
 ### Health Check
 
 ```bash
-# Manual health check
+# CLI snapshot (personas, optional Postgres ping, optional LLM probe) — exit 0/1
+python scripts/health_check.py
+python scripts/health_check.py --format table
+
+# In-container module health (library probes)
 docker compose exec sales-bot python3 -m src.core.health
 
-# Or read health file
+# Optional periodic JSON snapshot (if the process writes it)
 cat /tmp/sales-bot-health.json
 ```
 
@@ -300,4 +317,6 @@ cat /tmp/sales-bot-health.json
 
 - `MIGRATION.md`: Migration guide from legacy versions
 - `README.md`: Quick start and overview
+- `PERSONA_EXTENSION.md`: Adding a persona (folder + YAML + env prefix)
+- `PLATFORM_EXTENSION.md`: Adding a messaging platform adapter
 - `docs/`: Additional documentation

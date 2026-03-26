@@ -53,7 +53,7 @@
          ↓ (если да)
 ┌─────────────────┐
 │  Slow Generator │  (Claude — качественно)
-│  Генерит ответ  │  ← persona.yaml + память юзера
+│  Свободный текст│  ← persona.yaml + память (не JSON-контракт в ответе)
 └────────┬────────┘
          ↓
 ┌─────────────────┐
@@ -80,7 +80,9 @@
 - `behavior` — greeting policy, response examples
 - `product` — что продаёт
 - `triggers` — когда отвечать, когда молчать
-- `conversation_flow` — лимиты группы, стиль, тексты для ЛС; блок `dm_mode.funnel` — **подсказки для промпта**, а не отдельный state machine в графе (стадия воронки в DM обновляется из ответа генератора и пишется в память).
+- `conversation_flow` — лимиты группы (`group_mode.max_messages_per_hour`), стиль, тексты для ЛС; блок `dm_mode.funnel` — **подсказки для промпта**, а не state machine. Стадия воронки в DM берётся из памяти и после ответа обновляется **эвристикой** (`src/core/funnel_heuristic.py`), а не из поля `stage` ответа LLM.
+- `memory.entity_profile` — опционально `dog` | `fitness` | `generic`: выбор эвристического экстрактора сущностей в SQLite без правок кода.
+- `anti_spam.dm_max_inbound_burst_without_bot_reply` — лимит подряд входящих DM без исходящего ответа бота (персистентный счётчик в `users.extra` / SQLite).
 
 ## Секреты и аккаунты
 
@@ -133,15 +135,22 @@ sales-bot-engine/
 └── tests/
 ```
 
+## Валидация персон (CI)
+
+Структура и **семантическая полнота** YAML проверяются в тестах (`tests/test_persona_yaml_schema.py` → `src/core/persona_yaml_validate.py`): минимум примеров, триггеры, `max_messages_per_hour`, `vibe`, предупреждения по group-context и «бот»-примерам. Боевые файлы в `personas/` не должны ломать `pytest -m "not integration"`.
+
 ## Статус
 
-🚧 В активной разработке. См. `ARCHITECTURE.md` и `MIGRATION.md`.
+🚧 В активной разработке. См. `ARCHITECTURE.md`, `MIGRATION.md`, `PERSONA_EXTENSION.md`, `PLATFORM_EXTENSION.md`.
 
 ## Runtime Inventory
 
-- **Production:** `src/core/orchestrator.py` — multi-persona, `PersonaRuntime.adapter` + **LangGraph** (основной путь при успешной компиляции графа и `DATABASE_URL`).
-- **Legacy:** линейный `_handle_message_legacy` только если граф не собран — в логах `execution_path=legacy`.
-- **Платформы:** `src/platforms/` — `create_adapter()`; как добавить платформу — `PLATFORM_EXTENSION.md`.
+- **Production:** `src/core/orchestrator.py` — multi-persona, `PersonaRuntime.adapter` + **LangGraph** при заданном `DATABASE_URL` и успешной сборке графа.
+- **Legacy:** линейный `_handle_message_legacy` **только если `DATABASE_URL` не задан** (в логах `running legacy path, reason: DATABASE_URL not set`). Если URL есть, а граф не собрался — ошибка обработки, без отката в legacy.
+- **Наблюдаемость:** по завершении обработки сообщения — JSON trace (`event=message_trace` / поля `path`, `nodes`, `latency_ms`, `llm_error`, …).
+- **LLM:** при ошибке/таймауте генератор возвращает `None`, ответ пользователю не отправляется (лучше молчание, чем мусор).
+- **Платформы:** `src/platforms/` — `create_adapter()`; платформа — `PLATFORM_EXTENSION.md`, новая персона — `PERSONA_EXTENSION.md`.
+- **Health CLI:** `python scripts/health_check.py` (JSON/table, опционально Postgres и probe LLM).
 
 ## Автор
 

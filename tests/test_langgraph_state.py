@@ -46,6 +46,7 @@ class TestPersonaState:
         assert state["interaction_count"] == 0
         assert state["is_first_interaction"] is True
         assert state["parse_warnings"] == []
+        assert state["llm_failed"] is False
 
     def test_state_is_mutable(self, sample_message):
         """State should be mutable for node updates."""

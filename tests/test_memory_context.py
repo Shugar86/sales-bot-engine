@@ -10,7 +10,7 @@ class TestConversationTopics:
     
     def setup_method(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved")
+        self.memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved", entity_profile="dog")
     
     def test_topics_tracked_from_messages(self):
         """Topics should be extracted from user messages."""
@@ -50,7 +50,7 @@ class TestRecommendationTracking:
     
     def setup_method(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved")
+        self.memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved", entity_profile="dog")
     
     def test_recommendation_recorded(self):
         """Bot should remember what it recommended."""
@@ -83,7 +83,7 @@ class TestFunnelAutoProgress:
     
     def setup_method(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved")
+        self.memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved", entity_profile="dog")
     
     def test_buying_signal_advances_funnel(self):
         """Buying signals should advance funnel to ready_to_buy."""
@@ -128,7 +128,7 @@ class TestRichUserContext:
     
     def setup_method(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved")
+        self.memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved", entity_profile="dog")
     
     def test_context_includes_interaction_count(self):
         """Context should show how many times we interacted."""
@@ -172,7 +172,7 @@ class TestGroupContextForDM:
     
     def setup_method(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved")
+        self.memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved", entity_profile="dog")
     
     def test_group_messages_in_dm_context(self):
         """Group messages should be available when responding in DM."""

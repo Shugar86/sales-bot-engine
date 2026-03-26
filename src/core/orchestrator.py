@@ -363,6 +363,7 @@ class SalesBotOrchestrator:
         trace_path = "error"
         trace_decision = "n/a"
         trace_nodes = ""
+        trace_llm_error = False
 
         runtime.state = BotState.FETCHING
         runtime.stats["messages_processed"] += 1
@@ -402,13 +403,16 @@ class SalesBotOrchestrator:
                 logger.debug(f"[{runtime.config.name}] Path: {' -> '.join(node_history)}")
                 trace_decision = str(final_state.get("route_decision") or "n/a")
                 trace_nodes = "->".join(node_history)
+                trace_llm_error = bool(final_state.get("llm_failed"))
             elif runtime.legacy_message_path:
                 trace_path = "legacy"
                 logger.warning(
                     f"[{runtime.config.name}] running legacy path, reason: DATABASE_URL not set"
                 )
-                trace_decision = await self._handle_message_legacy(msg, runtime) or "n/a"
+                leg_dec, leg_llm_err = await self._handle_message_legacy(msg, runtime)
+                trace_decision = leg_dec or "n/a"
                 trace_nodes = "legacy"
+                trace_llm_error = leg_llm_err
             else:
                 reason = runtime.graph_compile_error or "graph_unavailable"
                 logger.error(
@@ -447,21 +451,23 @@ class SalesBotOrchestrator:
                         "nodes": trace_nodes,
                         "latency_ms": latency_ms,
                         "user_id": str(msg.user_id),
+                        "llm_error": trace_llm_error,
                     },
                     ensure_ascii=False,
                 )
             )
             runtime.state = BotState.IDLE
 
-    async def _handle_message_legacy(self, msg: IncomingMessage, runtime: PersonaRuntime) -> str:
+    async def _handle_message_legacy(
+        self, msg: IncomingMessage, runtime: PersonaRuntime
+    ) -> tuple[str, bool]:
         """Linear route → generate → send when LangGraph is unavailable (no DATABASE_URL).
 
         Returns:
-            Route decision string for tracing, or ``skipped_duplicate`` when the message
-            was already processed.
+            Tuple of trace decision string and whether an LLM/generation failure occurred.
         """
         if await runtime.memory.is_processed(msg.chat_id, msg.message_id, msg.text):
-            return "skipped_duplicate"
+            return ("skipped_duplicate", False)
 
         route_result = await runtime.router.route(
             message_text=msg.text or "",
@@ -477,17 +483,29 @@ class SalesBotOrchestrator:
                 logger.warning(
                     f"[{runtime.config.name}] legacy mark_processed after ignore: {mark_err}"
                 )
-            return route_result.decision.value
+            return (route_result.decision.value, False)
 
         try:
             if msg.is_dm:
                 user_context = await runtime.memory.get_user_context(msg.user_id)
+                get_hist = getattr(runtime.memory, "get_dm_transcript_for_prompt", None)
+                dm_hist = (
+                    await get_hist(msg.user_id)
+                    if callable(get_hist)
+                    else ""
+                )
+                if not (dm_hist or "").strip():
+                    dm_hist = "(ещё нет переписки в этой сессии)"
+                get_stage = getattr(runtime.memory, "get_funnel_stage", None)
+                funnel_st = (
+                    await get_stage(msg.user_id) if callable(get_stage) else "unknown"
+                )
                 response = await runtime.generator.generate_dm_response(
                     message_text=msg.text or "",
                     user_memory=user_context,
-                    dm_history="",
+                    dm_history=dm_hist,
                     group_context="",
-                    funnel_stage="unknown",
+                    funnel_stage=funnel_st or "unknown",
                 )
             else:
                 response = await runtime.generator.generate_group_response(
@@ -496,31 +514,42 @@ class SalesBotOrchestrator:
                     chat_vibe=None,
                 )
 
-            if response and response.text and runtime.adapter:
-                reply_to = None if msg.is_dm else msg.message_id
-                success = await runtime.adapter.send_reply(
-                    msg,
-                    response.text,
-                    SendOptions(
-                        reply_to_message_id=reply_to,
-                        typing_already_simulated=True,
-                    ),
-                )
+            if response is None:
+                logger.error(f"[{runtime.config.name}] legacy: generator returned no response (LLM error)")
+                return ("error", True)
 
-                if success:
-                    runtime.stats["responses_sent"] += 1
-                    try:
-                        await runtime.memory.mark_processed(msg.chat_id, msg.message_id, msg.text)
-                    except Exception as mark_err:
-                        logger.warning(
-                            f"[{runtime.config.name}] legacy mark_processed after send: {mark_err}"
-                        )
-                    return route_result.decision.value
+            if not response.text:
+                return ("error", False)
+
+            if not runtime.adapter:
+                return ("error", False)
+
+            reply_to = None if msg.is_dm else msg.message_id
+            success = await runtime.adapter.send_reply(
+                msg,
+                response.text,
+                SendOptions(
+                    reply_to_message_id=reply_to,
+                    typing_already_simulated=True,
+                ),
+            )
+
+            if success:
+                runtime.stats["responses_sent"] += 1
+                try:
+                    await runtime.memory.mark_processed(msg.chat_id, msg.message_id, msg.text)
+                except Exception as mark_err:
+                    logger.warning(
+                        f"[{runtime.config.name}] legacy mark_processed after send: {mark_err}"
+                    )
+                return (route_result.decision.value, False)
+
+            return ("error", False)
 
         except Exception as e:
             logger.error(f"[{runtime.config.name}] Legacy handler error: {e}")
 
-        return "error"
+        return ("error", True)
 
     async def _run_persona(self, runtime: PersonaRuntime):
         """Run a single persona: registry-built adapter + inbound loop."""

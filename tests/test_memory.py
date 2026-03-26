@@ -7,7 +7,7 @@ from src.memory.user_memory import UserMemoryStore
 @pytest.fixture
 def store(tmp_path):
     """Store с временной директорией — kormoved persona"""
-    return UserMemoryStore(memory_dir=str(tmp_path / "memory"), persona_name="kormoved")
+    return UserMemoryStore(memory_dir=str(tmp_path / "memory"), persona_name="kormoved", entity_profile="dog")
 
 
 class TestUserMemoryCRUD:
@@ -171,11 +171,11 @@ class TestPersistence:
     def test_data_survives_reload(self, tmp_path):
         mem_dir = str(tmp_path / "memory")
         
-        store1 = UserMemoryStore(memory_dir=mem_dir, persona_name="kormoved")
+        store1 = UserMemoryStore(memory_dir=mem_dir, persona_name="kormoved", entity_profile="dog")
         store1.record_group_message("123", "u", "U", "456", "Chat", "Овчарка")
         
         # Новый экземпляр — должен подхватить данные
-        store2 = UserMemoryStore(memory_dir=mem_dir, persona_name="kormoved")
+        store2 = UserMemoryStore(memory_dir=mem_dir, persona_name="kormoved", entity_profile="dog")
         data = store2._load("123")
         
         assert data["dog_breed"] == "Немецкая овчарка"
@@ -188,8 +188,20 @@ class TestPersistence:
         with open(os.path.join(mem_dir, "999.json"), "w") as f:
             f.write("{broken json")
         
-        store = UserMemoryStore(memory_dir=mem_dir, persona_name="kormoved")
+        store = UserMemoryStore(memory_dir=mem_dir, persona_name="kormoved", entity_profile="dog")
         data = store._load("999")  # Не должен упасть
         
         # Должен создать нового юзера
         assert "user_id" in data
+
+
+class TestDmInboundStreak:
+    """dm_inbound_streak in SQLite ``users.extra`` (antispam DM flood)."""
+
+    def test_increment_and_reset(self, store):
+        uid = "streak_user"
+        assert store.get_dm_inbound_streak(uid) == 0
+        assert store.increment_dm_inbound_streak(uid) == 1
+        assert store.get_dm_inbound_streak(uid) == 1
+        store.reset_dm_inbound_streak(uid)
+        assert store.get_dm_inbound_streak(uid) == 0

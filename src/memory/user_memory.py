@@ -27,7 +27,7 @@ logger = get_logger("memory")
 # ── Entity extractors ────────────────────────────────────────────────────────
 
 def _extract_dog_info(data: dict, text: str):
-    """Extract dog-related info (for kormoved persona)."""
+    """Extract dog-related info (``memory.entity_profile: dog``)."""
     text_lower = text.lower()
 
     breeds = {
@@ -129,13 +129,26 @@ def _extract_generic_info(data: dict, text: str):
             data.setdefault("interests", []).append(topic)
 
 
-ENTITY_EXTRACTORS: dict[str, Callable] = {
-    "kormoved": _extract_dog_info,
-    "dog_food": _extract_dog_info,
-    "андрей": _extract_dog_info,
-    "fitness": _extract_fitness_info,
-    "fitbro": _extract_fitness_info,
-}
+def resolve_entity_extractor(entity_profile: str = "", persona_name: str = "") -> Callable:
+    """Pick entity extractor from YAML ``memory.entity_profile`` (no persona-name tables in code).
+
+    Args:
+        entity_profile: ``dog`` | ``fitness`` | ``generic`` (or empty).
+        persona_name: Unused; kept for API compatibility.
+
+    Returns:
+        Extractor callable ``(data: dict, text: str) -> None``.
+    """
+    _ = persona_name
+    prof = (entity_profile or "").strip().lower()
+    if prof == "dog":
+        return _extract_dog_info
+    if prof == "fitness":
+        return _extract_fitness_info
+    if prof in ("", "generic"):
+        return _extract_generic_info
+    logger.warning("Unknown memory.entity_profile %r, using generic extractor", entity_profile)
+    return _extract_generic_info
 
 
 # ── Schema ────────────────────────────────────────────────────────────────────
@@ -193,9 +206,15 @@ class UserMemoryStore:
     no cross-persona contention.
     """
 
-    def __init__(self, memory_dir: str = "data/memory", persona_name: str = ""):
+    def __init__(
+        self,
+        memory_dir: str = "data/memory",
+        persona_name: str = "",
+        entity_profile: str = "",
+    ):
         self.memory_dir = memory_dir
         self.persona_name = (persona_name or "").lower()
+        self.entity_profile = (entity_profile or "").strip().lower()
         os.makedirs(memory_dir, exist_ok=True)
 
         db_path = os.path.join(memory_dir, "memory.db")
@@ -204,7 +223,7 @@ class UserMemoryStore:
         self._conn.executescript(_DDL)
         self._conn.commit()
 
-        self._extractor = self._get_extractor()
+        self._extractor = resolve_entity_extractor(self.entity_profile, self.persona_name)
         self._db_lock = None  # reserved for future async serialization
 
     def _execute_with_retry(self, sql: str, parameters: tuple = None, max_retries: int = 3) -> sqlite3.Cursor:
@@ -222,12 +241,6 @@ class UserMemoryStore:
                     time.sleep(wait)
                     continue
                 raise
-
-    def _get_extractor(self) -> Callable:
-        for key, extractor in ENTITY_EXTRACTORS.items():
-            if key in self.persona_name:
-                return extractor
-        return _extract_generic_info
 
     def _extract_entities(self, data: dict, text: str):
         try:
@@ -272,6 +285,47 @@ class UserMemoryStore:
             "UPDATE users SET extra = ? WHERE user_id = ?",
             (json.dumps(extra, ensure_ascii=False), user_id),
         )
+
+    def get_dm_inbound_streak(self, user_id: str) -> int:
+        """Count of consecutive inbound DMs not yet answered by a bot send (see antispam)."""
+        cursor = self._execute_with_retry(
+            "SELECT extra FROM users WHERE user_id = ?", (user_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return 0
+        try:
+            extra = json.loads(row["extra"] or "{}")
+        except json.JSONDecodeError:
+            return 0
+        try:
+            return int(extra.get("dm_inbound_streak", 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def increment_dm_inbound_streak(self, user_id: str) -> int:
+        """Increment streak after allowing this DM through antispam; returns new value."""
+        with self._conn:
+            self._ensure_user(user_id)
+            extra = self._load_extra(user_id)
+            n = int(extra.get("dm_inbound_streak", 0)) + 1
+            extra["dm_inbound_streak"] = n
+            self._save_extra(user_id, extra)
+        return n
+
+    def reset_dm_inbound_streak(self, user_id: str) -> None:
+        """Clear streak after the bot successfully sent a DM reply."""
+        with self._conn:
+            cursor = self._execute_with_retry(
+                "SELECT user_id FROM users WHERE user_id = ?", (user_id,)
+            )
+            if not cursor.fetchone():
+                return
+            extra = self._load_extra(user_id)
+            if extra.get("dm_inbound_streak", 0) == 0:
+                return
+            extra["dm_inbound_streak"] = 0
+            self._save_extra(user_id, extra)
 
     # ── Public write API ─────────────────────────────────────────────────────
 
@@ -477,34 +531,9 @@ class UserMemoryStore:
 
     def analyze_funnel_signals(self, user_id: str, message: str) -> str:
         """Detect funnel progression signals in *message*."""
-        text_lower = message.lower()
-        current = self.get_funnel_stage(user_id)
+        from ..core.funnel_heuristic import suggest_funnel_stage
 
-        buy_signals = [
-            "купить", "заказать", "сколько стоит", "как оплатить",
-            "доставка", "когда приедет", "хочу заказать", "беру",
-            "скинь ссылку", "где купить",
-        ]
-        if any(s in text_lower for s in buy_signals):
-            return "ready_to_buy"
-
-        interest_signals = [
-            "подробнее", "расскажи", "а как", "а почему", "а сколько",
-            "а если", "подходит ли", "а что насчёт", "а в чём разница",
-            "интересно", "а правда что",
-        ]
-        if any(s in text_lower for s in interest_signals):
-            return "asking_questions" if current not in ("unknown", "noticed") else "interested"
-
-        objection_signals = ["дорого", "мало денег", "не уверен", "подумаю", "не сейчас", "может позже"]
-        if any(s in text_lower for s in objection_signals):
-            return "objection"
-
-        disengage_signals = ["не надо", "отстань", "не интересно", "хватит"]
-        if any(s in text_lower for s in disengage_signals):
-            return "disengaged"
-
-        return current
+        return suggest_funnel_stage(self.get_funnel_stage(user_id), message)
 
     def get_all_users(self, stage: Optional[str] = None) -> list[dict]:
         """Return all users, optionally filtered by funnel stage."""

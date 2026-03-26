@@ -62,7 +62,7 @@ class SupabaseMemory:
     Example:
         memory = SupabaseMemory(config=SupabaseMemoryConfig(
             database_url="postgresql://...",
-            persona_name="kormoved"
+            persona_name="my_bot"
         ))
         await memory.initialize()
 
@@ -205,6 +205,93 @@ class SupabaseMemory:
             self.persona_name,
         )
         return dict(row) if row else None
+
+    @staticmethod
+    def _dm_streak_from_extra(raw) -> int:
+        """Parse ``dm_inbound_streak`` from users.extra (jsonb)."""
+        if raw is None:
+            return 0
+        if isinstance(raw, (bytes, str)):
+            try:
+                raw = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return 0
+        if not isinstance(raw, dict):
+            return 0
+        try:
+            return int(raw.get("dm_inbound_streak", 0))
+        except (TypeError, ValueError):
+            return 0
+
+    async def get_dm_inbound_streak(self, user_id: str) -> int:
+        """Consecutive inbound DMs without a completed bot reply (antispam)."""
+        row = await self.get_user(user_id)
+        if not row:
+            return 0
+        return self._dm_streak_from_extra(row.get("extra"))
+
+    async def increment_dm_inbound_streak(self, user_id: str) -> int:
+        """Ensure user exists, then bump ``dm_inbound_streak`` in ``users.extra``."""
+        await self._execute(
+            """
+            SELECT update_user_interaction($1, $2, $3, $4)
+            """,
+            user_id,
+            self.persona_name,
+            "",
+            "",
+        )
+        row = await self._fetchrow(
+            """
+            SELECT extra FROM users
+            WHERE user_id = $1 AND persona_name = $2
+            """,
+            user_id,
+            self.persona_name,
+        )
+        extra = row["extra"] if row and row["extra"] is not None else {}
+        if isinstance(extra, (bytes, str)):
+            try:
+                extra = json.loads(extra)
+            except (json.JSONDecodeError, TypeError):
+                extra = {}
+        if not isinstance(extra, dict):
+            extra = {}
+        n = int(extra.get("dm_inbound_streak", 0)) + 1
+        patch = json.dumps({"dm_inbound_streak": n}, ensure_ascii=False)
+        await self._execute(
+            """
+            UPDATE users SET extra = COALESCE(extra, '{}'::jsonb) || $3::jsonb
+            WHERE user_id = $1 AND persona_name = $2
+            """,
+            user_id,
+            self.persona_name,
+            patch,
+        )
+        return n
+
+    async def reset_dm_inbound_streak(self, user_id: str) -> None:
+        """Zero streak after a successful outbound DM."""
+        row = await self._fetchrow(
+            """
+            SELECT user_id FROM users
+            WHERE user_id = $1 AND persona_name = $2
+            """,
+            user_id,
+            self.persona_name,
+        )
+        if not row:
+            return
+        patch = json.dumps({"dm_inbound_streak": 0}, ensure_ascii=False)
+        await self._execute(
+            """
+            UPDATE users SET extra = COALESCE(extra, '{}'::jsonb) || $3::jsonb
+            WHERE user_id = $1 AND persona_name = $2
+            """,
+            user_id,
+            self.persona_name,
+            patch,
+        )
 
     async def set_funnel_stage(self, user_id: str, stage: str) -> None:
         """Set the funnel stage for a user."""
@@ -379,6 +466,16 @@ class SupabaseMemory:
             self.persona_name,
         )
         return dict(row) if row else {"summary": "", "last_tool": None, "last_tool_args": {}}
+
+    async def get_dm_transcript_tail(self, user_id: str, max_chars: int = 1500) -> str:
+        """Return the tail of the DM summary thread for prompts (chronological text)."""
+        dm = await self.get_dm_summary(user_id)
+        s = (dm.get("summary") or "").strip()
+        if not s:
+            return ""
+        if len(s) <= max_chars:
+            return s
+        return s[-max_chars:]
 
     # ========================================
     # GROUP MESSAGES

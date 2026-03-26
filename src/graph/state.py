@@ -95,6 +95,9 @@ class PersonaState(TypedDict):
     parse_warnings: Annotated[list[str], operator.add]
     """Non-fatal router parse issues (accumulated across nodes)."""
 
+    llm_failed: bool
+    """True when generation failed (timeout/API error), not merely empty output."""
+
 
 def build_initial_state(msg: IncomingMessage) -> PersonaState:
     """Build initial state for a new message processing run.
@@ -131,4 +134,5 @@ def build_initial_state(msg: IncomingMessage) -> PersonaState:
         "node_history": [],
         "error_message": None,
         "parse_warnings": [],
+        "llm_failed": False,
     }

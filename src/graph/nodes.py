@@ -427,6 +427,18 @@ async def antispam_node(state: PersonaState, config: RunnableConfig) -> dict:
         logger.warning(f"[{runtime.config.name}] Anti-spam blocked: {reason}")
         return {"can_send": False, "send_delay": 0.0, **updates}
 
+    # Per-user DM flood: too many consecutive inbound DMs without a bot reply
+    if msg.is_dm:
+        burst_limit = runtime.config.anti_spam.dm_max_inbound_burst_without_bot_reply
+        streak = await runtime.memory.get_dm_inbound_streak(msg.user_id)
+        if streak >= burst_limit:
+            logger.warning(
+                f"[{runtime.config.name}] DM inbound flood: user={msg.user_id} "
+                f"streak={streak} >= limit={burst_limit}"
+            )
+            return {"can_send": False, "send_delay": 0.0, **updates}
+        await runtime.memory.increment_dm_inbound_streak(msg.user_id)
+
     # Calculate delay
     delay = runtime.antispam.get_random_delay()
     logger.debug(f"[{runtime.config.name}] Anti-spam delay: {delay:.1f}s")
@@ -461,13 +473,16 @@ async def generate_node(state: PersonaState, config: RunnableConfig) -> dict:
             if recs:
                 user_context += f"\nУже рекомендовал: {'; '.join(recs)}"
 
-            # Funnel stage
             funnel_stage = await runtime.memory.get_funnel_stage(msg.user_id)
+
+            dm_history = await runtime.memory.get_dm_transcript_for_prompt(msg.user_id)
+            if not (dm_history or "").strip():
+                dm_history = "(ещё нет переписки в этой сессии)"
 
             response = await runtime.generator.generate_dm_response(
                 message_text=state["resolved_question"] or msg.text,
                 user_memory=user_context,
-                dm_history="",
+                dm_history=dm_history,
                 group_context="",
                 funnel_stage=funnel_stage,
             )
@@ -497,15 +512,16 @@ async def generate_node(state: PersonaState, config: RunnableConfig) -> dict:
             gen_updates: dict = {
                 "generated_text": response.text,
                 "node_history": ["generate"],
+                "llm_failed": False,
             }
-            if msg.is_dm:
-                st = (getattr(response, "stage", None) or "").strip()
-                if st:
-                    gen_updates["funnel_stage"] = st
             return gen_updates
         else:
             logger.info(f"[{runtime.config.name}] No response generated")
-            return {"generated_text": None, "node_history": ["generate"]}
+            return {
+                "generated_text": None,
+                "node_history": ["generate"],
+                "llm_failed": response is None,
+            }
 
     except Exception as e:
         logger.error(f"[{runtime.config.name}] Generation error: {e}")
@@ -513,6 +529,7 @@ async def generate_node(state: PersonaState, config: RunnableConfig) -> dict:
             "generated_text": None,
             "error_message": str(e),
             "node_history": ["generate"],
+            "llm_failed": True,
         }
 
 
@@ -625,6 +642,8 @@ async def send_node(state: PersonaState, config: RunnableConfig) -> dict:
         if success:
             # Record for anti-repeat
             await runtime.memory.record_bot_response(msg.chat_id, send_text)
+            if msg.is_dm:
+                await runtime.memory.reset_dm_inbound_streak(msg.user_id)
             # Update anti-spam stats
             runtime.antispam.record_send(msg.chat_id)
             # Update last response timestamp
@@ -671,8 +690,10 @@ async def memory_node(state: PersonaState, config: RunnableConfig) -> dict:
             if state.get("sent") and state.get("validated_text"):
                 response_text = state["validated_text"]
 
-            funnel = state.get("funnel_stage", "unknown")
-            stage_arg = funnel if funnel and funnel != "unknown" else ""
+            from ..core.funnel_heuristic import suggest_funnel_stage
+
+            cur = await runtime.memory.get_funnel_stage(msg.user_id)
+            new_stage = suggest_funnel_stage(cur, msg.text or "")
 
             await runtime.memory.record_dm(
                 user_id=msg.user_id,
@@ -680,7 +701,7 @@ async def memory_node(state: PersonaState, config: RunnableConfig) -> dict:
                 display_name=msg.display_name,
                 message=msg.text or "",
                 response=response_text,
-                stage=stage_arg,
+                stage=new_stage,
             )
         else:
             # Record group message

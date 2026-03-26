@@ -98,6 +98,7 @@ class TestAntiSpamConfig:
         c = AntiSpamConfig()
         assert c.leave_on_read == 0.35
         assert c.night_slowdown == 3.0
+        assert c.dm_max_inbound_burst_without_bot_reply == 3
     
     def test_custom(self):
         c = AntiSpamConfig(leave_on_read=0.5, night_start=22)

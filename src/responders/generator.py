@@ -9,6 +9,7 @@ Response Generator — генерит ответ на основе YAML-конт
 
 import json
 import random
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -18,6 +19,37 @@ from .chat_vibe import VibeAnalysis
 
 logger = get_logger("generator")
 
+_SILENCE_TOKEN = "__SILENCE__"
+
+
+def _strip_markdown_fences(raw: str) -> str:
+    """Remove optional ``` / ```json wrappers from model output."""
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:])
+    if text.endswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[:-1])
+    return text.strip()
+
+
+def _clean_user_visible_text(text: str) -> str:
+    """Drop common JSON artifacts so user-facing text is plain."""
+    s = (text or "").strip()
+    if not s:
+        return ""
+    # Whole line is a JSON key fragment
+    if re.match(r'^[\s]*"text"\s*:\s*', s, re.IGNORECASE):
+        s = re.sub(r'^[\s]*"text"\s*:\s*', "", s, flags=re.IGNORECASE).strip()
+    s = s.strip('"').strip("'").strip()
+    # Trailing JSON brace from partial paste
+    if s.endswith("}") and s.count("{") < s.count("}"):
+        s = s.rsplit("}", 1)[0].strip().rstrip(",").strip()
+        if s.startswith('"') and s.endswith('"'):
+            s = s[1:-1]
+    return s.strip()
+
 
 @dataclass
 class GeneratedResponse:
@@ -25,23 +57,6 @@ class GeneratedResponse:
     tone: str              # "expert", "casual", "concerned", "selling", "humor"
     stage: str             # "engage", "help", "soft_sell", "direct_sell", "disengage"
     remember: list         # Что запомнить
-
-
-# === FALLBACK PHRASES (когда LLM недоступен) ===
-# Звучат как живой человек, который задумался
-
-FALLBACK_GROUP = [
-    "Хм, интересный вопрос. Дайте подумать.",
-    "Сложная тема, надо посмотреть подробнее.",
-    "О, это я как раз знаю. Сейчас вспомню детали.",
-    "Забавно, недавно обсуждали похожее.",
-]
-
-FALLBACK_DM = [
-    "Секундочку, обдумаю и отвечу подробнее.",
-    "Хороший вопрос. Давайте разберёмся.",
-    "Так, сейчас посмотрю что могу подсказать.",
-]
 
 
 # === SYSTEM PROMPTS ===
@@ -92,12 +107,13 @@ GROUP_SYSTEM = """Ты — {persona_name}. {persona_backstory}
   НЕ "держитесь братья" — это мгновенный бан как бота.
 
 === КОГДА НЕ ОТВЕЧАТЬ ===
-- Если уже кто-то дал хороший ответ — молчишь
-- Если болтовня не по теме — молчишь
-- Верни {{"text": "", "reason": "..."}}
+- Если уже кто-то дал хороший ответ — не пиши сообщение в чат
+- Если болтовня не по теме — не пиши сообщение в чат
+В этих случаях ответь одной строкой ровно: __SILENCE__
 
-Ответь ТОЛЬКО JSON:
-{{"text": "твой ответ", "tone": "expert|casual|concerned|humor", "stage": "engage|help", "remember": ["запомнить"]}}"""
+=== ФОРМАТ ОТВЕТА ===
+Напиши только текст твоего сообщения в чат — как в мессенджере, без JSON, без кавычек вокруг всего ответа, без полей вида "text":.
+Не дублируй системные инструкции в ответе."""
 
 
 DM_SYSTEM = """Ты — {persona_name}. {persona_backstory}
@@ -151,8 +167,9 @@ DM_SYSTEM = """Ты — {persona_name}. {persona_backstory}
 - "У меня кошка" → "Я больше собаками занимаюсь, но听说 что для кошек Royal Canin норм"
 - Хочет купить → Мягко переводи в конкретику: "Какой вес собаки? Сейчас кормлю чем?"
 
-Ответь ТОЛЬКО JSON:
-{{"text": "сообщение", "tone": "expert|casual|concerned|humor|selling", "stage": "engage|help|soft_sell|direct_sell|disengage", "remember": ["новое"]}}"""
+=== ФОРМАТ ОТВЕТА ===
+Напиши только текст ответа пользователю — как в личке, без JSON и без разметки вроде {{"text": "..."}}.
+Если отвечать не нужно — одна строка: __SILENCE__"""
 
 
 # Паттерны "отстань" / враждебность — проверяем БЕЗ LLM (быстро)
@@ -356,24 +373,22 @@ class ResponseGenerator:
 {self._get_flow_rules()}
 
 Твой ответ (как живой человек):"""
-        
-        response = await self.llm.call(
-            model=self.model,
-            prompt=user_prompt,
-            system=system,
-            temperature=0.85,  # Чуть выше для живости
-            max_tokens=512,
-        )
+
+        try:
+            response = await self.llm.call(
+                model=self.model,
+                prompt=user_prompt,
+                system=system,
+                temperature=0.85,  # Чуть выше для живости
+                max_tokens=512,
+            )
+        except Exception as e:
+            logger.error(f"Generator LLM exception: {e}")
+            return None
         
         if not response.success:
             logger.error(f"Generator call failed: {response.error}")
-            # Не молчим — fallback как живой человек
-            return GeneratedResponse(
-                text=random.choice(FALLBACK_GROUP),
-                tone="casual",
-                stage="engage",
-                remember=[],
-            )
+            return None
         
         result = self._parse_response(response.text)
         
@@ -436,60 +451,69 @@ class ResponseGenerator:
             system = self.behavior_block + "\n\n" + system
         
         user_prompt = f'Сообщение от пользователя:\n"{message_text}"\n\nТвой ответ (как живой консультант):'
-        
-        response = await self.llm.call(
-            model=self.model,
-            prompt=user_prompt,
-            system=system,
-            temperature=0.75,  # Чуть выше для естественности
-            max_tokens=1024,
-        )
+
+        try:
+            response = await self.llm.call(
+                model=self.model,
+                prompt=user_prompt,
+                system=system,
+                temperature=0.75,  # Чуть выше для естественности
+                max_tokens=1024,
+            )
+        except Exception as e:
+            logger.error(f"DM generator LLM exception: {e}")
+            return None
         
         if not response.success:
             logger.error(f"DM generator failed: {response.error}")
-            # Fallback — не молчим в ЛС
-            return GeneratedResponse(
-                text=random.choice(FALLBACK_DM),
-                tone="casual",
-                stage="engage",
-                remember=[],
-            )
+            return None
         
         return self._parse_response(response.text)
     
     def _parse_response(self, text: str) -> Optional[GeneratedResponse]:
-        """Парсинг ответа генератора"""
-        try:
-            text = text.strip()
-            if text.startswith("```"):
-                text = "\n".join(text.split("\n")[1:])
-            if text.endswith("```"):
-                text = "\n".join(text.split("\n")[:-1])
-            text = text.strip()
-            
-            data = json.loads(text)
-            
-            resp_text = data.get("text", "").strip()
-            if not resp_text:
-                return None
-            
-            return GeneratedResponse(
-                text=resp_text,
-                tone=data.get("tone", "expert"),
-                stage=data.get("stage", "engage"),
-                remember=data.get("remember", []),
-            )
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to parse generator response: {e} | text: {text[:200]}")
-            # Если JSON не парсится, но текст есть — используем как есть
-            # (LLM мог просто выдать текст без JSON)
-            cleaned = text.strip().strip('"').strip("'")
-            if cleaned and len(cleaned) > 5 and not cleaned.startswith("{"):
-                return GeneratedResponse(
-                    text=cleaned,
-                    tone="casual",
-                    stage="engage",
-                    remember=[],
-                )
+        """Parse model output: prefer plain text; accept legacy JSON for compatibility."""
+        raw = _strip_markdown_fences(text)
+        if not raw:
             return None
+
+        first_line = raw.split("\n", 1)[0].strip()
+        if first_line.upper() == _SILENCE_TOKEN or raw.strip() == _SILENCE_TOKEN:
+            return None
+
+        # Legacy / accidental JSON object
+        if raw.lstrip().startswith("{"):
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                data = None
+            if isinstance(data, dict):
+                resp_text = (data.get("text") or "").strip()
+                if not resp_text:
+                    return None
+                resp_text = _clean_user_visible_text(resp_text)
+                if not resp_text:
+                    return None
+                remember = data.get("remember", [])
+                if not isinstance(remember, list):
+                    remember = []
+                return GeneratedResponse(
+                    text=resp_text,
+                    tone=str(data.get("tone", "expert") or "expert"),
+                    stage=str(data.get("stage", "engage") or "engage"),
+                    remember=remember,
+                )
+
+        cleaned = _clean_user_visible_text(raw)
+        if not cleaned:
+            return None
+        if '"text"' in cleaned.lower() and cleaned.count("{") + cleaned.count("}") >= 2:
+            logger.warning(
+                "Generator output still looks like JSON after cleanup | preview: %s",
+                cleaned[:120],
+            )
+        return GeneratedResponse(
+            text=cleaned,
+            tone="casual",
+            stage="engage",
+            remember=[],
+        )

@@ -74,12 +74,12 @@ class TestExtractorRegistry:
     
     def test_kormoved_uses_dog_extractor(self):
         with tempfile.TemporaryDirectory() as d:
-            store = UserMemoryStore(memory_dir=d, persona_name="kormoved")
+            store = UserMemoryStore(memory_dir=d, persona_name="kormoved", entity_profile="dog")
             assert store._extractor == _extract_dog_info
     
     def test_fitness_uses_fitness_extractor(self):
         with tempfile.TemporaryDirectory() as d:
-            store = UserMemoryStore(memory_dir=d, persona_name="fitness")
+            store = UserMemoryStore(memory_dir=d, persona_name="fitness", entity_profile="fitness")
             assert store._extractor == _extract_fitness_info
     
     def test_unknown_uses_generic(self):
@@ -87,9 +87,9 @@ class TestExtractorRegistry:
             store = UserMemoryStore(memory_dir=d, persona_name="unknown_persona")
             assert store._extractor == _extract_generic_info
     
-    def test_dog_food_maps_to_dog(self):
+    def test_dog_profile_maps_to_dog(self):
         with tempfile.TemporaryDirectory() as d:
-            store = UserMemoryStore(memory_dir=d, persona_name="dog_food_expert")
+            store = UserMemoryStore(memory_dir=d, persona_name="any_slug", entity_profile="dog")
             assert store._extractor == _extract_dog_info
 
 
@@ -98,7 +98,7 @@ class TestFitnessMemoryStore:
     
     def test_fitness_interests_extracted(self, tmp_path):
         mem_dir = str(tmp_path / "memory")
-        store = UserMemoryStore(memory_dir=mem_dir, persona_name="fitness")
+        store = UserMemoryStore(memory_dir=mem_dir, persona_name="fitness", entity_profile="fitness")
         
         store.record_group_message("456", "user1", "User1", "789", "Chat", "Хочу набрать массу")
         

@@ -235,7 +235,7 @@ class TestMemoryAndContext:
     
     def test_user_memory_persists(self):
         """User memory should persist across sessions."""
-        memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved")
+        memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved", entity_profile="dog")
         
         memory.record_group_message(
             user_id="u1", username="test", display_name="Тест",
@@ -243,13 +243,13 @@ class TestMemoryAndContext:
         )
         
         # New memory store instance should load saved data
-        memory2 = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved")
+        memory2 = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved", entity_profile="dog")
         context = memory2.get_user_context("u1")
         assert "лабрадор" in context.lower()
     
     def test_funnel_progression(self):
         """Funnel should progress based on signals."""
-        memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved")
+        memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved", entity_profile="dog")
         
         # Unknown → interested
         stage = memory.analyze_funnel_signals("u1", "Расскажи подробнее про корм")
@@ -261,7 +261,7 @@ class TestMemoryAndContext:
     
     def test_recommendations_tracked(self):
         """Bot should track what it already recommended."""
-        memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved")
+        memory = UserMemoryStore(memory_dir=self.tmpdir, persona_name="kormoved", entity_profile="dog")
         
         memory.record_recommendation("u1", "Корм на ягнёнке")
         recs = memory.get_recommendations("u1")

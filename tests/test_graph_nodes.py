@@ -24,6 +24,7 @@ from src.graph.nodes import (
 from src.graph.state import build_initial_state
 from src.models.message import IncomingMessage, Platform
 from src.core.router import Decision, RouteResult
+from src.core.vibe_schema import AntiSpamConfig
 from src.platforms.capabilities import PlatformCapabilities
 
 
@@ -61,8 +62,14 @@ def mock_runtime():
     runtime.memory.record_group_message = AsyncMock()
     runtime.memory.search_semantic = AsyncMock(return_value=[])
     runtime.memory.get_recent_messages = AsyncMock(return_value=[])
+    runtime.memory.get_dm_transcript_for_prompt = AsyncMock(return_value="User: hi\nBot: hello")
+    runtime.memory.get_funnel_stage = AsyncMock(return_value="unknown")
+    runtime.memory.set_funnel_stage = AsyncMock()
     runtime.memory.record_bot_response = AsyncMock()
     runtime.memory.is_repeating_response = AsyncMock(return_value=False)
+    runtime.memory.get_dm_inbound_streak = AsyncMock(return_value=0)
+    runtime.memory.increment_dm_inbound_streak = AsyncMock(return_value=1)
+    runtime.memory.reset_dm_inbound_streak = AsyncMock()
 
     # Mock preprocessor
     runtime.preprocessor = MagicMock()
@@ -88,7 +95,7 @@ def mock_runtime():
         reason="User is asking a question"
     ))
 
-    # Mock anti-spam
+    # Mock anti-spam (RateLimiter side; YAML limits come from config.anti_spam)
     runtime.antispam = MagicMock()
     runtime.antispam.should_leave_on_read = MagicMock(return_value=False)
     runtime.antispam.should_use_emoji_reaction = MagicMock(return_value=False)
@@ -138,9 +145,12 @@ def mock_runtime():
     runtime.config.name = "test_persona"
     runtime.config.platform = "telegram"
     runtime.config.account_type = "userbot"
-    runtime.config.anti_spam = MagicMock()
-    runtime.config.anti_spam.random_typos = False
-    runtime.config.anti_spam.typing_simulation = False
+    runtime.config.anti_spam = AntiSpamConfig(
+        typing_simulation=False,
+        random_typos=False,
+        min_delay_between_messages=1,
+        max_delay_between_messages=2,
+    )
 
     return runtime
 
@@ -398,6 +408,47 @@ class TestAntispamNode:
 
         assert result["can_send"] is False
 
+    @pytest.mark.asyncio
+    async def test_dm_fourth_inbound_blocked_without_bot_reply(
+        self, sample_message, mock_config, mock_runtime
+    ):
+        """After N=3 admitted DMs, streak 3 blocks the 4th (no increment on block)."""
+        state = build_initial_state(sample_message)
+        state["message"].is_dm = True
+
+        class _Streak:
+            def __init__(self) -> None:
+                self.n = 0
+
+            async def get(self, _uid: str) -> int:
+                return self.n
+
+            async def inc(self, _uid: str) -> int:
+                self.n += 1
+                return self.n
+
+        s = _Streak()
+        mock_runtime.memory.get_dm_inbound_streak = AsyncMock(side_effect=s.get)
+        mock_runtime.memory.increment_dm_inbound_streak = AsyncMock(side_effect=s.inc)
+
+        for i in range(3):
+            r = await antispam_node(state, mock_config)
+            assert r["can_send"] is True, f"call {i + 1}"
+        r4 = await antispam_node(state, mock_config)
+        assert r4["can_send"] is False
+        assert mock_runtime.memory.increment_dm_inbound_streak.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_group_chat_skips_dm_burst(self, sample_message, mock_config, mock_runtime):
+        """Group messages must not touch DM inbound streak."""
+        state = build_initial_state(sample_message)
+        state["message"].is_dm = False
+
+        await antispam_node(state, mock_config)
+
+        mock_runtime.memory.get_dm_inbound_streak.assert_not_awaited()
+        mock_runtime.memory.increment_dm_inbound_streak.assert_not_awaited()
+
 
 class TestGenerateNode:
     """Test generate_node."""
@@ -413,6 +464,21 @@ class TestGenerateNode:
         result = await generate_node(state, mock_config)
 
         assert result["generated_text"] == "I recommend this food"
+        mock_runtime.generator.generate_dm_response.assert_awaited()
+        dm_call = mock_runtime.generator.generate_dm_response.call_args
+        assert "User: hi" in (dm_call.kwargs.get("dm_history") or "")
+
+    @pytest.mark.asyncio
+    async def test_dm_generation_llm_failed_when_none(self, sample_message, mock_config, mock_runtime):
+        """Generator returned None (LLM error) → llm_failed True."""
+        state = build_initial_state(sample_message)
+        state["message"].is_dm = True
+        mock_runtime.generator.generate_dm_response = AsyncMock(return_value=None)
+
+        result = await generate_node(state, mock_config)
+
+        assert result.get("generated_text") is None
+        assert result.get("llm_failed") is True
 
     @pytest.mark.asyncio
     async def test_group_generation(self, sample_message, mock_config, mock_runtime):
@@ -472,6 +538,36 @@ class TestSendNode:
 
         assert result["sent"] is True
         mock_runtime.adapter.send_reply.assert_called_once()
+        mock_runtime.memory.reset_dm_inbound_streak.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_dm_send_failure_does_not_reset_streak(
+        self, sample_message, mock_config, mock_runtime
+    ):
+        state = build_initial_state(sample_message)
+        state["validated_text"] = "Response to send"
+        state["send_delay"] = 0.0
+        mock_runtime.adapter.send_reply = AsyncMock(return_value=False)
+
+        result = await send_node(state, mock_config)
+
+        assert result["sent"] is False
+        mock_runtime.memory.reset_dm_inbound_streak.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_group_send_does_not_reset_dm_streak(
+        self, sample_message, mock_config, mock_runtime
+    ):
+        state = build_initial_state(sample_message)
+        state["message"].is_dm = False
+        state["validated_text"] = "Group reply"
+        state["send_delay"] = 0.0
+        mock_runtime.adapter.send_reply = AsyncMock(return_value=True)
+
+        result = await send_node(state, mock_config)
+
+        assert result["sent"] is True
+        mock_runtime.memory.reset_dm_inbound_streak.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_failed_send(self, sample_message, mock_config, mock_runtime):
