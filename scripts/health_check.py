@@ -95,6 +95,27 @@ def _check_memory_dir(memory_dir: str) -> dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
+def _orchestrator_view_from_snapshot(snapshot: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """Build a flat per-persona view from an orchestrator health snapshot file."""
+    if not snapshot or snapshot.get("source") != "sales-bot-orchestrator":
+        return {}
+    out: dict[str, Any] = {}
+    for name, pdata in (snapshot.get("personas") or {}).items():
+        if not isinstance(pdata, dict):
+            continue
+        sup = pdata.get("supervisor") if isinstance(pdata.get("supervisor"), dict) else {}
+        out[str(name)] = {
+            "bot_state": pdata.get("state"),
+            "supervisor_state": sup.get("state"),
+            "supervisor_failed": sup.get("state") == "failed",
+            "message_path_mode": pdata.get("message_path_mode"),
+            "postgres_degraded": pdata.get("postgres_degraded"),
+            "restart_count": sup.get("restart_count"),
+            "last_error": sup.get("last_error"),
+        }
+    return out
+
+
 async def _run_checks(
     personas_dir: str,
     memory_dir: str,
@@ -107,6 +128,7 @@ async def _run_checks(
 
     persona_rows, persona_errors = _check_personas(personas_dir)
     memory_status = _check_memory_dir(memory_dir)
+    snapshot = _load_optional_snapshot(snapshot_path)
 
     report: dict[str, Any] = {
         "personas_dir": personas_dir,
@@ -114,7 +136,8 @@ async def _run_checks(
         "memory": memory_status,
         "postgres": None,
         "llm": None,
-        "snapshot": _load_optional_snapshot(snapshot_path),
+        "snapshot": snapshot,
+        "orchestrator": _orchestrator_view_from_snapshot(snapshot),
         "critical_ok": True,
         "warnings": [],
     }
@@ -133,6 +156,13 @@ async def _run_checks(
             report["critical_ok"] = False
     else:
         report["postgres"] = {"ok": None, "detail": "DATABASE_URL not set"}
+
+    orch = report.get("orchestrator") or {}
+    for pname, od in orch.items():
+        if od.get("message_path_mode") == "legacy" and od.get("postgres_degraded"):
+            report["warnings"].append(
+                f"Orchestrator persona {pname}: legacy path (postgres unavailable at startup)"
+            )
 
     if api_key.strip():
         llm = await check_llm_reachable(api_key.strip())
@@ -157,6 +187,18 @@ def _print_table(report: dict[str, Any]) -> None:
     for p in report.get("personas") or []:
         status = "OK" if p.get("ok") else "FAIL"
         print(f"  [{status}] {p.get('name')}")
+    orch = report.get("orchestrator") or {}
+    if orch:
+        print("orchestrator (from SALES_BOT_HEALTH_FILE snapshot):")
+        for pname, od in sorted(orch.items()):
+            sup = od.get("supervisor_state") or "n/a"
+            failed = "FAILED" if od.get("supervisor_failed") else "ok"
+            mode = od.get("message_path_mode") or "n/a"
+            deg = od.get("postgres_degraded")
+            print(
+                f"  [{failed}] {pname}: supervisor={sup} path={mode} "
+                f"postgres_degraded={deg}"
+            )
     mem = report.get("memory") or {}
     print(f"memory: {'OK' if mem.get('ok') else 'FAIL'} {mem.get('path') or mem.get('error')}")
     pg = report.get("postgres") or {}

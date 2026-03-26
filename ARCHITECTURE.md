@@ -51,7 +51,7 @@ The Sales Bot Engine is a multi-persona sales automation system that monitors Te
 │                   src/core/lifecycle.py                        │
 │  ┌──────────────────────────────────────────────────────────┐ │
 │  │  • PersonaSupervisor per persona                         │ │
-│  │  • Automatic restart with exponential backoff             │ │
+│  │  • Automatic restart (exponential or fixed backoff schedule) │ │
 │  │  • Health tracking (last_alive, restart_count)            │ │
 │  │  • Graceful shutdown coordination                         │ │
 │  └──────────────────────────────────────────────────────────┘ │
@@ -60,7 +60,8 @@ The Sales Bot Engine is a multi-persona sales automation system that monitors Te
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                   Per-Persona Runtime                           │
-│   LangGraph when DATABASE_URL set; legacy path only if unset    │
+│ LangGraph if DATABASE_URL set **and** Postgres ping OK; else    │
+│ legacy path (URL unset **or** DB unreachable at startup)        │
 ├─────────────────────────────────────────────────────────────────┤
 │  PlatformAdapter.run → IncomingMessage → LangGraph:             │
 │  Dedup → Preprocess → parallel_retrieval → Route →               │
@@ -78,7 +79,7 @@ The Sales Bot Engine is a multi-persona sales automation system that monitors Te
 | Module | Responsibility | Key Classes |
 |--------|---------------|-------------|
 | `orchestrator.py` | Main coordination, persona loading, LangGraph invoke; one JSON **message_trace** per handled message (`path`, `nodes`, `latency_ms`, `llm_error`, …) | `SalesBotOrchestrator`, `PersonaRuntime` (`adapter`), `BotState` |
-| `lifecycle.py` | Task supervision, restart policy, health tracking | `PersonaSupervisor`, `LifecycleManager`, `SupervisorConfig` |
+| `lifecycle.py` | Task supervision; optional fixed backoff schedule; terminal **`failed`** after max attempts; health dict maps legacy `exhausted` → `"failed"` | `PersonaSupervisor`, `LifecycleManager`, `SupervisorConfig` |
 | `persona_manager.py` | YAML loading; `discover_personas`; optional `memory.entity_profile` for extractors | `PersonaConfig`, `discover_personas()` |
 | `funnel_heuristic.py` | DM funnel stage suggestion from current stage + user text (shared SQLite/Postgres semantics) | `suggest_funnel_stage()` |
 | `persona_yaml_validate.py` | Static + **semantic** persona YAML checks (errors/warnings) | `validate_all_personas_under()`, `assert_persona_yaml_file_valid()` |
@@ -110,10 +111,11 @@ The orchestrator and LangGraph nodes depend only on `PlatformAdapter`, not on Te
 
 | Module | Responsibility | Storage |
 |--------|---------------|---------|
-| `dedup.py` | Message deduplication | SQLite (WAL mode) |
+| `dedup.py` | Message deduplication | SQLite (WAL mode), **one DB file per persona** under `MEMORY_DIR/<persona_slug>/` — same `(chat_id, message_id)` in different files does not cross personas (see `tests/test_dedup_per_persona.py`) |
 | `user_memory.py` | User context, funnel, entity extraction by `memory.entity_profile` | SQLite (`users.extra` JSON) |
 | `supabase_memory.py` | Async user/DM/group memory, semantic search | PostgreSQL + optional pgvector |
-| `memory_facade.py` | Unified API for graph: context, `get_dm_transcript_for_prompt`, streak helpers, embeddings | Delegates to `SupabaseMemory` |
+| `memory_facade.py` | Unified API for graph: context, `get_dm_transcript_for_prompt`, streak helpers, embeddings | Delegates to `SupabaseMemory`; orchestrator passes a **fresh** `EmbeddingProvider` per persona via `create_embedding_provider()` |
+| `degraded_memory.py` | Legacy path when Postgres missing/unreachable: dedup-backed `is_processed` / `mark_processed`, safe stubs for graph-only APIs | `DegradedMemoryFacade` |
 
 **DM prompt context:** `generate_node` loads `funnel_stage` via `get_funnel_stage`, recommendations via `get_recommendations`, and a chronological thread tail via `get_dm_transcript_for_prompt` (not only the condensed profile block). After a reply, `memory_node` records the exchange and updates funnel stage using `funnel_heuristic.suggest_funnel_stage` (not the LLM’s `stage` field).
 
@@ -231,25 +233,37 @@ persona:
 - `memory_writable`: Test write to memory directory
 - `personas`: Verify personas directory and configs
 
-### Health File
+### Health snapshot file (`SALES_BOT_HEALTH_FILE`)
 
-Written to `/tmp/sales-bot-health.json` every 30s:
+The orchestrator writes JSON every `SALES_BOT_HEALTH_INTERVAL_SEC` seconds (default 30, minimum 5) while running:
 
 ```json
 {
-  "status": "healthy",
+  "source": "sales-bot-orchestrator",
   "timestamp": 1700000000,
-  "checks": {
-    "llm_api": {"status": "healthy", "latency_ms": 150},
-    "memory_writable": {"status": "healthy"},
-    "personas": {"status": "healthy", "count": 3}
+  "running": true,
+  "personas": {
+    "MyPersona": {
+      "state": "idle",
+      "supervisor": {"state": "failed", "restart_count": 2, "last_error": "..."},
+      "message_path_mode": "legacy",
+      "postgres_degraded": true
+    }
   }
 }
 ```
 
+`scripts/health_check.py` embeds the raw file under `snapshot` and adds a flattened `orchestrator` map (`supervisor_state`, `message_path_mode`, `postgres_degraded`) for each persona.
+
 ### Orchestrator status
 
-`SalesBotOrchestrator.get_status()` returns per persona: `platform` and `account_type` from YAML, `platform_key` from `PlatformAdapter` when the inbound loop has started (otherwise `null`), plus stats and lifecycle supervisor fields.
+`SalesBotOrchestrator.get_status()` returns per persona: `platform` and `account_type` from YAML, `platform_key` from `PlatformAdapter` when the inbound loop has started (otherwise `null`), plus stats, lifecycle `supervisor` health, `message_path_mode` (`graph` \| `legacy` \| `error`), and `postgres_degraded`.
+
+### CI and “Turing” tests
+
+The default unit job runs **all** tests matching `pytest -m "not integration"`, which **includes** `tests/test_turing_readiness.py` and `tests/test_turing_edge_cases.py` (they are not marked `integration`). Scenarios such as “ты бот?” live in `tests/test_turing_edge_cases.py`.
+
+Optional real-LLM tests can be marked `@pytest.mark.llm`. Workflow job **`optional_llm`** runs `pytest -m llm` with `continue-on-error: true` and treats pytest exit code **5** (no tests collected) as success so the job stays green until markers are attached.
 
 ---
 

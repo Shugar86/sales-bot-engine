@@ -72,7 +72,7 @@ class TestPersonaSupervisor:
 
         await supervisor._supervise()  # Run directly to completion
 
-        assert supervisor.health.state == TaskState.EXHAUSTED
+        assert supervisor.health.state == TaskState.FAILED
         assert supervisor.health.restart_count == 2
         assert start_count == 3  # Initial + 2 restarts
 

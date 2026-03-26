@@ -26,7 +26,11 @@ def mock_memory_and_graph(monkeypatch):
         m.persona_name = persona_name
         return m
 
-    with patch.object(
+    with patch(
+        "src.core.orchestrator._postgres_reachable",
+        new_callable=AsyncMock,
+        return_value=True,
+    ), patch.object(
         graph_builder,
         "compile_persona_graph",
         new_callable=AsyncMock,

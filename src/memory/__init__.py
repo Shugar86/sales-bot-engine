@@ -18,7 +18,12 @@ from .user_memory import UserMemoryStore
 from .supabase_memory import SupabaseMemory, SupabaseMemoryConfig, get_memory_for_persona
 
 # Embeddings
-from .embeddings import EmbeddingProvider, get_embedding_provider, reset_embedding_provider
+from .embeddings import (
+    EmbeddingProvider,
+    create_embedding_provider,
+    get_embedding_provider,
+    reset_embedding_provider,
+)
 
 # Unified facade
 from .memory_facade import MemoryFacade, get_facade_for_persona
@@ -32,6 +37,7 @@ __all__ = [
     "get_memory_for_persona",
     # Embeddings
     "EmbeddingProvider",
+    "create_embedding_provider",
     "get_embedding_provider",
     "reset_embedding_provider",
     # Facade

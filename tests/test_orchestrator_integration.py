@@ -42,6 +42,10 @@ def mock_memory_and_graph(monkeypatch):
     )
     graph_builder = importlib.import_module("src.graph.builder")
     with patch(
+        "src.core.orchestrator._postgres_reachable",
+        new_callable=AsyncMock,
+        return_value=True,
+    ), patch(
         "src.core.orchestrator.MemoryFacade.create",
         new_callable=AsyncMock,
         return_value=mem,

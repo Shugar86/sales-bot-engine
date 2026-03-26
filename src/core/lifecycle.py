@@ -10,9 +10,9 @@ Provides structured lifecycle management for persona tasks:
 
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Awaitable, Optional
+from typing import Callable, Awaitable, Optional, Tuple
 
 from ..utils.logger import get_logger
 
@@ -32,12 +32,18 @@ class TaskState(Enum):
 @dataclass
 class SupervisorConfig:
     """Configuration for task supervision."""
+
+    #: After this many *restarts* (not counting the first run), give up → FAILED.
+    #: Total task attempts = max_restarts + 1 (e.g. max_restarts=2 → 3 crashes then stop).
     max_restarts: int = 5
     backoff_base_sec: float = 10.0
     backoff_max_sec: float = 300.0  # 5 minutes max
     jitter: bool = True
     graceful_shutdown_timeout_sec: float = 10.0
     health_check_interval_sec: float = 30.0
+    #: If non-empty, used instead of exponential backoff: delay before restart after
+    #: failure on attempt ``i`` is ``backoff_schedule_sec[min(i, len-1)]``.
+    backoff_schedule_sec: Tuple[float, ...] = field(default_factory=tuple)
 
 
 @dataclass
@@ -96,14 +102,18 @@ class PersonaSupervisor:
         getattr(logger, level)(f"[{self.persona_name}] {message}", extra=extra)
 
     def _calculate_backoff(self, attempt: int) -> float:
-        """Calculate backoff delay with optional jitter."""
+        """Calculate backoff delay before the next restart after failure on ``attempt``."""
         import random
+
+        sched = self.config.backoff_schedule_sec
+        if sched:
+            idx = min(attempt, len(sched) - 1)
+            return max(0.0, float(sched[idx]))
 
         delay = self.config.backoff_base_sec * (2 ** attempt)
         delay = min(delay, self.config.backoff_max_sec)
 
         if self.config.jitter:
-            # Add ±25% jitter
             jitter = delay * 0.25 * (2 * random.random() - 1)
             delay += jitter
 
@@ -175,11 +185,11 @@ class PersonaSupervisor:
                         # Backoff elapsed, continue to restart
                         pass
                 else:
-                    self.health.state = TaskState.EXHAUSTED
+                    self.health.state = TaskState.FAILED
                     self._log(
                         "error",
-                        f"Task exhausted {self.config.max_restarts} restart attempts. "
-                        f"Final error: {e}"
+                        f"Task FAILED after {self.config.max_restarts + 1} attempts "
+                        f"(no more restarts). Final error: {e}"
                     )
                     return
 
@@ -228,9 +238,13 @@ class PersonaSupervisor:
         """Get current health status as dict."""
         now = time.time()
 
+        state_val = self.health.state.value
+        if self.health.state == TaskState.EXHAUSTED:
+            state_val = "failed"
+
         return {
             "persona_name": self.persona_name,
-            "state": self.health.state.value,
+            "state": state_val,
             "is_running": self.is_running(),
             "started_at": self.health.started_at,
             "uptime_sec": now - self.health.started_at if self.health.started_at else None,

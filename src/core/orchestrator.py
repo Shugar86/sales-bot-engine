@@ -18,9 +18,10 @@ import asyncio
 import json
 import os
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from ..core.lifecycle import LifecycleManager, PersonaSupervisor, SupervisorConfig
 from ..core.persona_manager import PersonaConfig, discover_personas
@@ -29,6 +30,8 @@ from ..core.output_validators import OutputValidator
 from ..core.prompt_compiler import PromptCompiler
 from ..core.vibe_schema import ResponseExample, GreetingPolicy as SchemaGreetingPolicy
 from ..graph.state import build_initial_state
+from ..memory.degraded_memory import DegradedMemoryFacade
+from ..memory.embeddings import create_embedding_provider
 from ..memory.memory_facade import MemoryFacade
 from ..responders.generator import ResponseGenerator
 from ..monitors.anti_spam import RateLimiter
@@ -45,6 +48,24 @@ from ..utils.logger import get_logger
 from ..models.message import IncomingMessage
 
 logger = get_logger("orchestrator")
+
+
+async def _postgres_reachable(database_url: str, timeout_sec: float = 3.0) -> bool:
+    """Return True if Postgres accepts a connection and ``SELECT 1``."""
+    try:
+        import asyncpg
+
+        conn = await asyncio.wait_for(
+            asyncpg.connect(database_url), timeout=timeout_sec
+        )
+        try:
+            await conn.execute("SELECT 1")
+        finally:
+            await conn.close()
+        return True
+    except Exception as e:
+        logger.debug("Postgres ping failed: %s", e)
+        return False
 
 
 class BotState(Enum):
@@ -69,7 +90,7 @@ class PersonaRuntime:
     router: MessageRouter
     generator: ResponseGenerator
     antispam: RateLimiter
-    memory: MemoryFacade  # NEW: Unified Supabase+embeddings facade
+    memory: Union[MemoryFacade, DegradedMemoryFacade]
     dedup: DeduplicationStore  # Kept for backward compatibility during migration
     composer: ResponseComposer = None  # Response composer (greeting, formatting)
     preprocessor: PreprocessNode = None  # Deterministic shortcuts
@@ -81,6 +102,10 @@ class PersonaRuntime:
     legacy_message_path: bool = False
     # Error message when DATABASE_URL was set but compile_persona_graph failed.
     graph_compile_error: Optional[str] = None
+    #: True when DATABASE_URL was set but Postgres was unreachable at startup (degraded legacy).
+    postgres_degraded: bool = False
+    #: Why legacy path is active (logging / health).
+    legacy_reason: str = ""
     state: BotState = BotState.IDLE
     stats: dict = field(default_factory=lambda: {
         "messages_processed": 0,
@@ -122,6 +147,7 @@ class SalesBotOrchestrator:
         self.runtimes: dict[str, PersonaRuntime] = {}
         self._lifecycle = LifecycleManager()
         self._running = False
+        self._health_snapshot_task: Optional[asyncio.Task] = None
 
     def load_personas(self) -> list[PersonaConfig]:
         """Load all persona configs from directory."""
@@ -185,14 +211,38 @@ class SalesBotOrchestrator:
             cooldown_sec=config.anti_spam.min_delay_between_messages,
         )
 
-        # NEW: Memory Facade (Supabase + embeddings)
-        memory = await MemoryFacade.create(persona_name=config.name)
-
-        # Dedup (kept during migration period)
+        # Dedup first (per-persona SQLite); also backs DegradedMemoryFacade when DB is down.
         persona_memory_dir = os.path.join(self.memory_dir, config.name.lower().replace(" ", "_"))
         dedup = DeduplicationStore(
             storage_path=os.path.join(persona_memory_dir, "processed_messages.json")
         )
+
+        database_url = (os.getenv("DATABASE_URL") or "").strip()
+        use_degraded_memory = False
+        postgres_degraded = False
+        legacy_reason_mem = ""
+
+        if not database_url:
+            use_degraded_memory = True
+            legacy_reason_mem = "DATABASE_URL not set"
+        elif not await _postgres_reachable(database_url):
+            logger.warning(
+                f"[{config.name}] Postgres unreachable at startup — using legacy message path "
+                f"(dedup-only memory); process continues without LangGraph"
+            )
+            use_degraded_memory = True
+            postgres_degraded = True
+            legacy_reason_mem = "postgres_unreachable"
+
+        if use_degraded_memory:
+            memory: Any = DegradedMemoryFacade(dedup, persona_name=config.name)
+        else:
+            emb = create_embedding_provider(cache_size=512)
+            memory = await MemoryFacade.create(
+                persona_name=config.name,
+                database_url=database_url,
+                embedding_provider=emb,
+            )
 
         # Response Composer (greeting handling, formatting)
         gp = config.greeting_policy
@@ -257,17 +307,20 @@ class SalesBotOrchestrator:
             output_validator=output_validator,
         )
         runtime.stats["started_at"] = time.time()
+        runtime.postgres_degraded = postgres_degraded
 
-        database_url = (os.getenv("DATABASE_URL") or "").strip()
-        if not database_url:
+        if use_degraded_memory:
             runtime.legacy_message_path = True
+            runtime.legacy_reason = legacy_reason_mem
             runtime.graph = None
             runtime.graph_compile_error = None
-            logger.warning(
-                f"[{config.name}] LangGraph skipped: DATABASE_URL not set (legacy message path only)"
-            )
+            if legacy_reason_mem == "DATABASE_URL not set":
+                logger.warning(
+                    f"[{config.name}] LangGraph skipped: {legacy_reason_mem} (legacy message path only)"
+                )
         else:
             runtime.legacy_message_path = False
+            runtime.legacy_reason = ""
             runtime.graph_compile_error = None
             try:
                 from ..graph.builder import compile_persona_graph
@@ -407,7 +460,7 @@ class SalesBotOrchestrator:
             elif runtime.legacy_message_path:
                 trace_path = "legacy"
                 logger.warning(
-                    f"[{runtime.config.name}] running legacy path, reason: DATABASE_URL not set"
+                    f"[{runtime.config.name}] running legacy path, reason: {runtime.legacy_reason or 'legacy'}"
                 )
                 leg_dec, leg_llm_err = await self._handle_message_legacy(msg, runtime)
                 trace_decision = leg_dec or "n/a"
@@ -575,7 +628,9 @@ class SalesBotOrchestrator:
     def _create_supervisor(self, runtime: PersonaRuntime) -> PersonaSupervisor:
         """Create a supervisor for a persona runtime."""
         config = SupervisorConfig(
-            max_restarts=5,
+            max_restarts=2,
+            backoff_schedule_sec=(5.0, 30.0, 120.0),
+            jitter=False,
             backoff_base_sec=10.0,
             backoff_max_sec=300.0,
             graceful_shutdown_timeout_sec=10.0,
@@ -628,6 +683,11 @@ class SalesBotOrchestrator:
         await self._lifecycle.start_all()
         logger.info(f"Running {len(self.runtimes)} personas in parallel")
 
+        self._health_snapshot_task = asyncio.create_task(
+            self._health_snapshot_loop(),
+            name="orchestrator-health-snapshot",
+        )
+
         # Wait for shutdown or any supervisor to complete
         await self._lifecycle.wait_for_shutdown()
 
@@ -635,6 +695,14 @@ class SalesBotOrchestrator:
         """Stop all running personas gracefully."""
         logger.info("Stopping orchestrator...")
         self._running = False
+
+        if self._health_snapshot_task and not self._health_snapshot_task.done():
+            self._health_snapshot_task.cancel()
+            try:
+                await self._health_snapshot_task
+            except asyncio.CancelledError:
+                pass
+            self._health_snapshot_task = None
 
         # Stop all supervisors (handles task cancellation)
         await self._lifecycle.stop_all(timeout=10.0)
@@ -653,6 +721,13 @@ class SalesBotOrchestrator:
             except Exception as e:
                 logger.debug(f"[{name}] LLM close error: {e}")
 
+            emb = getattr(runtime.memory, "embeddings", None)
+            if emb is not None and hasattr(emb, "clear_cache"):
+                try:
+                    emb.clear_cache()
+                except Exception as e:
+                    logger.debug(f"[{name}] Embedding cache clear error: {e}")
+
             # Close memory facade (Supabase connection pool)
             try:
                 await runtime.memory.close()
@@ -660,6 +735,43 @@ class SalesBotOrchestrator:
                 logger.debug(f"[{name}] Memory close error: {e}")
 
         logger.info("All personas stopped")
+
+    @staticmethod
+    def _message_path_mode(runtime: PersonaRuntime) -> str:
+        """graph | legacy | error — how inbound messages are handled."""
+        if runtime.graph is not None:
+            return "graph"
+        if runtime.legacy_message_path:
+            return "legacy"
+        return "error"
+
+    async def _health_snapshot_loop(self) -> None:
+        """Write ``get_status()``-derived JSON for ``scripts/health_check.py``."""
+        path = Path(os.getenv("SALES_BOT_HEALTH_FILE", "/tmp/sales-bot-health.json"))
+        try:
+            interval = float(os.getenv("SALES_BOT_HEALTH_INTERVAL_SEC", "30"))
+        except ValueError:
+            interval = 30.0
+        interval = max(5.0, interval)
+
+        while self._running:
+            try:
+                payload = {
+                    "source": "sales-bot-orchestrator",
+                    "timestamp": time.time(),
+                    "running": self._running,
+                    "personas": self.get_status()["personas"],
+                }
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_suffix(path.suffix + ".tmp")
+                tmp.write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                tmp.replace(path)
+            except Exception as e:
+                logger.debug("health snapshot write skipped: %s", e)
+            await asyncio.sleep(interval)
 
     def get_status(self) -> dict:
         """Get status of all personas."""
@@ -676,9 +788,15 @@ class SalesBotOrchestrator:
                     "account_type": runtime.config.account_type,
                     "stats": runtime.stats,
                     "antispam": runtime.antispam.get_stats(),
-                    "uptime_sec": time.time() - runtime.stats["started_at"] if runtime.stats["started_at"] else 0,
-                    "last_message_sec_ago": time.time() - runtime.stats["last_message_at"] if runtime.stats["last_message_at"] else None,
+                    "uptime_sec": time.time() - runtime.stats["started_at"]
+                    if runtime.stats["started_at"]
+                    else 0,
+                    "last_message_sec_ago": time.time() - runtime.stats["last_message_at"]
+                    if runtime.stats["last_message_at"]
+                    else None,
                     "supervisor": lifecycle_health.get(name, {}),
+                    "message_path_mode": self._message_path_mode(runtime),
+                    "postgres_degraded": runtime.postgres_degraded,
                 }
                 for name, runtime in self.runtimes.items()
             },

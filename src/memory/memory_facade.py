@@ -74,6 +74,7 @@ class MemoryFacade:
         cls,
         persona_name: str,
         database_url: Optional[str] = None,
+        embedding_provider: Optional[EmbeddingProvider] = None,
         embedding_model: Optional[str] = None,
         embedding_device: Optional[str] = None,
         embedding_cache_size: int = 512,
@@ -84,6 +85,8 @@ class MemoryFacade:
         Args:
             persona_name: Name of the persona
             database_url: PostgreSQL connection string
+            embedding_provider: Optional pre-built provider; if omitted, uses the
+                global singleton from :func:`get_embedding_provider`.
             embedding_model: Model name for embeddings
             embedding_device: 'cpu' or 'cuda'
             embedding_cache_size: LRU cache size
@@ -92,12 +95,12 @@ class MemoryFacade:
         Returns:
             Initialized MemoryFacade instance
         """
-        # Get or create embedding provider (shared across personas)
-        embedding_provider = get_embedding_provider(
-            model_name=embedding_model,
-            device=embedding_device,
-            cache_size=embedding_cache_size,
-        )
+        if embedding_provider is None:
+            embedding_provider = get_embedding_provider(
+                model_name=embedding_model,
+                device=embedding_device,
+                cache_size=embedding_cache_size,
+            )
 
         # Create memory config
         config = SupabaseMemoryConfig(

@@ -8,6 +8,7 @@ import yaml
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.core.orchestrator import SalesBotOrchestrator
+from src.memory.degraded_memory import DegradedMemoryFacade
 from src.models.message import IncomingMessage, Platform
 from src.platforms.capabilities import PlatformCapabilities
 
@@ -98,6 +99,10 @@ def mock_memory_and_graph(monkeypatch):
     )
     graph_builder = importlib.import_module("src.graph.builder")
     with patch(
+        "src.core.orchestrator._postgres_reachable",
+        new_callable=AsyncMock,
+        return_value=True,
+    ), patch(
         "src.core.orchestrator.MemoryFacade.create",
         new_callable=AsyncMock,
         return_value=mem,
@@ -317,10 +322,33 @@ class TestOrchestratorLegacyAndTrace:
         monkeypatch.delenv("DATABASE_URL", raising=False)
         graph_builder = importlib.import_module("src.graph.builder")
         configs = orchestrator.load_personas()
-        with patch(
-            "src.core.orchestrator.MemoryFacade.create",
+        with patch.object(
+            graph_builder,
+            "compile_persona_graph",
             new_callable=AsyncMock,
-            return_value=AsyncMock(close=AsyncMock()),
+        ) as compile_mock:
+            runtime = await orchestrator._build_runtime(configs[0])
+        compile_mock.assert_not_called()
+        assert isinstance(runtime.memory, DegradedMemoryFacade)
+        assert runtime.legacy_message_path is True
+        assert runtime.graph is None
+        assert runtime.graph_compile_error is None
+
+    @pytest.mark.asyncio
+    async def test_postgres_unreachable_degrades_to_legacy(
+        self, orchestrator, monkeypatch
+    ) -> None:
+        """DATABASE_URL set but ping fails → DegradedMemoryFacade, no graph compile."""
+        monkeypatch.setenv(
+            "DATABASE_URL",
+            "postgresql://postgres:test@localhost:1/nope",
+        )
+        graph_builder = importlib.import_module("src.graph.builder")
+        configs = orchestrator.load_personas()
+        with patch(
+            "src.core.orchestrator._postgres_reachable",
+            new_callable=AsyncMock,
+            return_value=False,
         ), patch.object(
             graph_builder,
             "compile_persona_graph",
@@ -328,9 +356,11 @@ class TestOrchestratorLegacyAndTrace:
         ) as compile_mock:
             runtime = await orchestrator._build_runtime(configs[0])
         compile_mock.assert_not_called()
+        assert isinstance(runtime.memory, DegradedMemoryFacade)
         assert runtime.legacy_message_path is True
+        assert runtime.postgres_degraded is True
         assert runtime.graph is None
-        assert runtime.graph_compile_error is None
+        assert runtime.legacy_reason == "postgres_unreachable"
 
     @pytest.mark.asyncio
     async def test_database_url_compile_failure_not_legacy(self, orchestrator, monkeypatch):
@@ -341,6 +371,10 @@ class TestOrchestratorLegacyAndTrace:
         graph_builder = importlib.import_module("src.graph.builder")
         configs = orchestrator.load_personas()
         with patch(
+            "src.core.orchestrator._postgres_reachable",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
             "src.core.orchestrator.MemoryFacade.create",
             new_callable=AsyncMock,
             return_value=AsyncMock(close=AsyncMock()),
@@ -370,6 +404,10 @@ class TestOrchestratorLegacyAndTrace:
         mem.close = AsyncMock()
         mem.mark_processed = AsyncMock()
         with patch(
+            "src.core.orchestrator._postgres_reachable",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
             "src.core.orchestrator.MemoryFacade.create",
             new_callable=AsyncMock,
             return_value=mem,
@@ -480,3 +518,5 @@ class TestOrchestratorStatus:
         assert status["personas"]["TestBot"]["platform"] == "telegram"
         assert status["personas"]["TestBot"]["platform_key"] is None
         assert status["personas"]["TestBot"]["state"] == "idle"
+        assert status["personas"]["TestBot"]["message_path_mode"] == "graph"
+        assert status["personas"]["TestBot"]["postgres_degraded"] is False

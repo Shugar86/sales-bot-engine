@@ -69,6 +69,12 @@
 
 Пайплайн в проде реализован как **LangGraph** с чекпоинтером в PostgreSQL (`DATABASE_URL`). Подробности — `ARCHITECTURE.md`.
 
+### Деградация, снимок здоровья и качество
+
+- **Postgres недоступен при старте** (при заданном `DATABASE_URL`): персона остаётся в процессе на **legacy**-пути (dedup + `DegradedMemoryFacade`), граф не собирается; в статусе `postgres_degraded: true`.
+- Оркестратор пишет JSON в `SALES_BOT_HEALTH_FILE` (по умолчанию `/tmp/sales-bot-health.json`); `python scripts/health_check.py` подмешивает этот файл в отчёт (`orchestrator.*`).
+- Скрипт `python scripts/quality_snapshot.py --persona <slug> [--mock]` — быстрый чек ответов DM по YAML (в тестах используется `--mock` без сети).
+
 ## YAML-конфигурация
 
 Каждая персона = отдельная директория в `personas/`:

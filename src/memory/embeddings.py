@@ -214,6 +214,34 @@ class EmbeddingProvider:
 _global_provider: Optional[EmbeddingProvider] = None
 
 
+def create_embedding_provider(
+    model_name: Optional[str] = None,
+    device: Optional[str] = None,
+    cache_size: int = 512,
+) -> EmbeddingProvider:
+    """Build a new :class:`EmbeddingProvider` for one persona (no global singleton).
+
+    Each call returns a separate instance with its own LRU cache. The orchestrator
+    should use this when constructing :class:`~src.memory.memory_facade.MemoryFacade`
+    so personas do not share embedding caches.
+
+    Args:
+        model_name: HuggingFace model id; if omitted, uses ``EMBEDDING_MODEL`` or the
+            provider default.
+        device: ``cpu``, ``cuda``, or similar; if omitted, uses ``EMBEDDING_DEVICE``
+            or ``cpu``.
+        cache_size: Maximum number of encoded strings to keep in the LRU cache.
+
+    Returns:
+        A new ``EmbeddingProvider`` instance.
+    """
+    return EmbeddingProvider(
+        model_name=model_name,
+        device=device,
+        cache_size=cache_size,
+    )
+
+
 def get_embedding_provider(
     model_name: Optional[str] = None,
     device: Optional[str] = None,
@@ -232,7 +260,7 @@ def get_embedding_provider(
     global _global_provider
 
     if _global_provider is None:
-        _global_provider = EmbeddingProvider(
+        _global_provider = create_embedding_provider(
             model_name=model_name,
             device=device,
             cache_size=cache_size,
