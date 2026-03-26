@@ -5,13 +5,17 @@ import importlib
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.core.orchestrator import SalesBotOrchestrator, PersonaRuntime
+from src.core.orchestrator import SalesBotOrchestrator
 from src.core.persona_manager import PersonaConfig, AntiSpamConfig, GroupModeConfig
 
 
 @pytest.fixture
-def mock_memory_and_graph():
+def mock_memory_and_graph(monkeypatch):
     """Stub Supabase memory and LangGraph compile for fast runtime builds."""
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://postgres:test@localhost:5432/testdb",
+    )
     graph_builder = importlib.import_module("src.graph.builder")
     graph_mock = MagicMock()
     graph_mock.ainvoke = AsyncMock(return_value={})

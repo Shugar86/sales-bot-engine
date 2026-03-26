@@ -10,7 +10,6 @@ Vibe Checker решает: стоит ли вступать в разговор,
 - Если нет → wait, maybe react with emoji, maybe leave on read
 """
 
-import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -269,11 +268,7 @@ class VibeChecker:
         
         # Если поведение говорит "делись личным опытом" — можно вступать
         # на более широкий круг тем
-        share_indicators = [
-            "личн", "опыт", "у меня", "моя собака", "я кормлю",
-            "я пробовал", "у меня было",
-        ]
-        
+
         # Если в тексте есть вопрос — больше шансов вступить
         has_question = "?" in text or any(
             w in text for w in ["как", "что", "почему", "где", "когда", "кто"]

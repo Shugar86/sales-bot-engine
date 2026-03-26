@@ -1,10 +1,7 @@
 """
 Tests for Memory & Context improvements
 """
-import json
-import os
 import tempfile
-import pytest
 from src.memory.user_memory import UserMemoryStore
 
 

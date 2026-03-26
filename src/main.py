@@ -24,9 +24,9 @@ import signal
 import sys
 from pathlib import Path
 
-from config.settings import load_config, LLMConfig
+from config.settings import load_config
 from src.utils.logger import setup_logging, get_logger
-from src.core.orchestrator import SalesBotOrchestrator, run_orchestrator
+from src.core.orchestrator import SalesBotOrchestrator
 
 
 logger = get_logger("main")

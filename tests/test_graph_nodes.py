@@ -4,8 +4,7 @@ Unit tests for each node in isolation, mocking dependencies.
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from langchain_core.runnables import RunnableConfig
+from unittest.mock import AsyncMock, MagicMock
 
 from src.graph.nodes import (
     dedup_node,
@@ -22,7 +21,7 @@ from src.graph.nodes import (
     emoji_node,
     send_shortcut_node,
 )
-from src.graph.state import PersonaState, build_initial_state
+from src.graph.state import build_initial_state
 from src.models.message import IncomingMessage, Platform
 from src.core.router import Decision, RouteResult
 from src.platforms.capabilities import PlatformCapabilities
@@ -338,6 +337,24 @@ class TestRouteNode:
 
         assert result["route_decision"] == "ignore"
 
+    @pytest.mark.asyncio
+    async def test_parse_failed_adds_parse_warnings(self, sample_message, mock_config, mock_runtime):
+        """Router parse failure should surface in state for observability."""
+        state = build_initial_state(sample_message)
+        state["resolved_question"] = sample_message.text
+        mock_runtime.router.route = AsyncMock(
+            return_value=RouteResult(
+                decision=Decision.IGNORE,
+                confidence=0.0,
+                reason="invalid decision: FOO",
+                parse_failed=True,
+            )
+        )
+
+        result = await route_node(state, mock_config)
+
+        assert result["parse_warnings"] == ["invalid decision: FOO"]
+
 
 class TestMapRouterDecisionForGraph:
     """Unit tests for router Decision → graph route_decision mapping."""
@@ -491,7 +508,7 @@ class TestMemoryNode:
         state = build_initial_state(sample_message)
         state["message"].is_dm = False
 
-        result = await memory_node(state, mock_config)
+        await memory_node(state, mock_config)
 
         mock_runtime.memory.record_group_message.assert_called_once()
 

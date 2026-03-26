@@ -15,28 +15,27 @@ New: LangGraph-based state machine with Supabase PostgreSQL persistence.
 """
 
 import asyncio
+import json
 import os
+import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from ..core.lifecycle import LifecycleManager, PersonaSupervisor, SupervisorConfig
-from ..core.persona_manager import PersonaConfig, PersonaManager, discover_personas
-from ..core.router import MessageRouter, Decision, RouteResult
-from ..core.output_validators import OutputValidator, ValidationResult
+from ..core.persona_manager import PersonaConfig, discover_personas
+from ..core.router import MessageRouter, Decision
+from ..core.output_validators import OutputValidator
 from ..core.prompt_compiler import PromptCompiler
-from ..core.vibe_schema import VibePersona, VibeBehavior, ResponseExample, GreetingPolicy as SchemaGreetingPolicy
+from ..core.vibe_schema import ResponseExample, GreetingPolicy as SchemaGreetingPolicy
 from ..graph.state import build_initial_state
 from ..memory.memory_facade import MemoryFacade
-from ..responders.generator import ResponseGenerator, GeneratedResponse
-from ..monitors.anti_spam import RateLimiter, TypingSpeedCalculator
+from ..responders.generator import ResponseGenerator
+from ..monitors.anti_spam import RateLimiter
 from ..platforms import PlatformAdapter, SendOptions, UnknownPlatformError, create_adapter
-from ..responders.text_humanizer import humanize_text
-from ..responders.chat_vibe import detect_chat_vibe
 from ..responders.response_composer import (
     ResponseComposer,
     GreetingPolicy,
-    looks_like_greeting,
 )
 from ..responders.preprocess import PreprocessNode
 from ..responders.anaphora_resolver import AnaphoraResolver
@@ -77,7 +76,11 @@ class PersonaRuntime:
     anaphora: AnaphoraResolver = None  # Context anaphora resolution
     output_validator: OutputValidator = None  # Post-generation output validation
     adapter: Optional[PlatformAdapter] = None  # Telegram* / VK / future platforms
-    graph: Optional[Any] = None  # NEW: Compiled LangGraph
+    graph: Optional[Any] = None  # Compiled LangGraph (None if no DB URL or compile failed)
+    # True only when DATABASE_URL was unset at build — enables legacy path in _handle_message.
+    legacy_message_path: bool = False
+    # Error message when DATABASE_URL was set but compile_persona_graph failed.
+    graph_compile_error: Optional[str] = None
     state: BotState = BotState.IDLE
     stats: dict = field(default_factory=lambda: {
         "messages_processed": 0,
@@ -128,8 +131,6 @@ class SalesBotOrchestrator:
 
     async def _build_runtime(self, config: PersonaConfig) -> PersonaRuntime:
         """Build runtime components for a persona."""
-        import time
-
         # LLM client (shared key, per-persona instance)
         llm = LLMClient(
             api_key=self.api_key,
@@ -257,15 +258,27 @@ class SalesBotOrchestrator:
         )
         runtime.stats["started_at"] = time.time()
 
-        # Compile LangGraph for this persona (lazy import — pulls Postgres checkpoint driver)
-        try:
-            from ..graph.builder import compile_persona_graph
+        database_url = (os.getenv("DATABASE_URL") or "").strip()
+        if not database_url:
+            runtime.legacy_message_path = True
+            runtime.graph = None
+            runtime.graph_compile_error = None
+            logger.warning(
+                f"[{config.name}] LangGraph skipped: DATABASE_URL not set (legacy message path only)"
+            )
+        else:
+            runtime.legacy_message_path = False
+            runtime.graph_compile_error = None
+            try:
+                from ..graph.builder import compile_persona_graph
 
-            runtime.graph = await compile_persona_graph(runtime)
-            logger.info(f"Compiled LangGraph for {config.name}")
-        except Exception as e:
-            logger.error(f"Failed to compile graph for {config.name}: {e}")
-            # Continue without graph - will use fallback _handle_message_legacy
+                runtime.graph = await compile_persona_graph(runtime)
+                logger.info(f"Compiled LangGraph for {config.name}")
+            except Exception as e:
+                err_msg = str(e)
+                logger.error(f"Failed to compile graph for {config.name}: {err_msg}")
+                runtime.graph = None
+                runtime.graph_compile_error = err_msg
 
         return runtime
 
@@ -346,7 +359,10 @@ class SalesBotOrchestrator:
         Uses compiled graph with PostgresSaver for state persistence.
         Thread ID: "{persona_name}:{user_id}:{chat_id}"
         """
-        import time
+        t0 = time.perf_counter()
+        trace_path = "error"
+        trace_decision = "n/a"
+        trace_nodes = ""
 
         runtime.state = BotState.FETCHING
         runtime.stats["messages_processed"] += 1
@@ -364,60 +380,89 @@ class SalesBotOrchestrator:
         config = build_config(runtime, thread_id)
 
         try:
-            # Run the graph
-            if runtime.graph:
+            if runtime.graph is not None:
+                trace_path = "graph"
                 logger.debug(
                     f"[{runtime.config.name}] execution_path=graph thread_id={thread_id}"
                 )
                 final_state = await runtime.graph.ainvoke(initial_state, config=config)
 
-                # Update stats based on results
                 if final_state.get("sent"):
                     runtime.stats["responses_sent"] += 1
                 elif final_state.get("route_decision") == "ignore":
                     runtime.stats["ignored"] += 1
 
-                # Log any errors
                 if final_state.get("error_message"):
                     runtime.stats["errors"] += 1
-                    logger.error(f"[{runtime.config.name}] Graph error: {final_state['error_message']}")
+                    logger.error(
+                        f"[{runtime.config.name}] Graph error: {final_state['error_message']}"
+                    )
 
-                # Log node history for debugging
                 node_history = final_state.get("node_history", [])
                 logger.debug(f"[{runtime.config.name}] Path: {' -> '.join(node_history)}")
-            else:
+                trace_decision = str(final_state.get("route_decision") or "n/a")
+                trace_nodes = "->".join(node_history)
+            elif runtime.legacy_message_path:
+                trace_path = "legacy"
                 logger.warning(
-                    f"[{runtime.config.name}] execution_path=legacy "
-                    "reason=no_compiled_graph (DATABASE_URL / graph build failed)"
+                    f"[{runtime.config.name}] running legacy path, reason: DATABASE_URL not set"
                 )
-                await self._handle_message_legacy(msg, runtime)
+                trace_decision = await self._handle_message_legacy(msg, runtime) or "n/a"
+                trace_nodes = "legacy"
+            else:
+                reason = runtime.graph_compile_error or "graph_unavailable"
+                logger.error(
+                    f"[{runtime.config.name}] graph unavailable (compile failed), "
+                    f"not using legacy path: {reason}"
+                )
+                runtime.stats["errors"] += 1
+                trace_path = "error"
+                trace_nodes = "none"
+                try:
+                    await runtime.memory.mark_processed(msg.chat_id, msg.message_id, msg.text)
+                except Exception:
+                    pass
 
         except Exception as e:
             logger.error(f"[{runtime.config.name}] Graph invocation error: {e}")
             runtime.stats["errors"] += 1
-            # Try to at least mark as processed
+            trace_path = "error"
+            trace_decision = "n/a"
+            if not trace_nodes:
+                trace_nodes = "exception"
             try:
                 await runtime.memory.mark_processed(msg.chat_id, msg.message_id, msg.text)
             except Exception:
                 pass
 
         finally:
+            latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "message_trace",
+                        "persona": runtime.config.name,
+                        "path": trace_path,
+                        "decision": trace_decision,
+                        "nodes": trace_nodes,
+                        "latency_ms": latency_ms,
+                        "user_id": str(msg.user_id),
+                    },
+                    ensure_ascii=False,
+                )
+            )
             runtime.state = BotState.IDLE
 
-    async def _handle_message_legacy(self, msg: IncomingMessage, runtime: PersonaRuntime):
-        """Legacy handler for fallback when graph is not available.
+    async def _handle_message_legacy(self, msg: IncomingMessage, runtime: PersonaRuntime) -> str:
+        """Linear route → generate → send when LangGraph is unavailable (no DATABASE_URL).
 
-        Simplified version of the original linear pipeline.
+        Returns:
+            Route decision string for tracing, or ``skipped_duplicate`` when the message
+            was already processed.
         """
-        # Quick dedup check
-        is_dup = await runtime.memory.is_processed(msg.chat_id, msg.message_id, msg.text)
-        if is_dup:
-            return
+        if await runtime.memory.is_processed(msg.chat_id, msg.message_id, msg.text):
+            return "skipped_duplicate"
 
-        # Mark processed
-        await runtime.memory.mark_processed(msg.chat_id, msg.message_id, msg.text)
-
-        # Simple routing
         route_result = await runtime.router.route(
             message_text=msg.text or "",
             chat_context=[],
@@ -426,10 +471,14 @@ class SalesBotOrchestrator:
 
         if route_result.decision in (Decision.IGNORE, Decision.DISENGAGE):
             runtime.stats["ignored"] += 1
-            return
+            try:
+                await runtime.memory.mark_processed(msg.chat_id, msg.message_id, msg.text)
+            except Exception as mark_err:
+                logger.warning(
+                    f"[{runtime.config.name}] legacy mark_processed after ignore: {mark_err}"
+                )
+            return route_result.decision.value
 
-        # RESPOND, ENGAGE, WAIT, SALES_DM → generate (aligned with LangGraph route mapping)
-        # Generate response
         try:
             if msg.is_dm:
                 user_context = await runtime.memory.get_user_context(msg.user_id)
@@ -460,18 +509,18 @@ class SalesBotOrchestrator:
 
                 if success:
                     runtime.stats["responses_sent"] += 1
-                    # Record to memory
-                    await runtime.memory.record_dm(
-                        user_id=msg.user_id,
-                        username=msg.username,
-                        display_name=msg.display_name,
-                        message=msg.text or "",
-                        response=response.text,
-                        stage="unknown",
-                    )
+                    try:
+                        await runtime.memory.mark_processed(msg.chat_id, msg.message_id, msg.text)
+                    except Exception as mark_err:
+                        logger.warning(
+                            f"[{runtime.config.name}] legacy mark_processed after send: {mark_err}"
+                        )
+                    return route_result.decision.value
 
         except Exception as e:
             logger.error(f"[{runtime.config.name}] Legacy handler error: {e}")
+
+        return "error"
 
     async def _run_persona(self, runtime: PersonaRuntime):
         """Run a single persona: registry-built adapter + inbound loop."""
@@ -585,8 +634,6 @@ class SalesBotOrchestrator:
 
     def get_status(self) -> dict:
         """Get status of all personas."""
-        import time
-
         # Get lifecycle health for all supervisors
         lifecycle_health = self._lifecycle.get_health()
 

@@ -1,8 +1,6 @@
 """Tests for UserMemoryStore"""
 import pytest
-import json
 import os
-import shutil
 from src.memory.user_memory import UserMemoryStore
 
 

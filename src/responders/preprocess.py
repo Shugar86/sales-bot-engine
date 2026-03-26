@@ -16,13 +16,12 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from .response_composer import (
     CompositionContext,
     ResponseComposer,
-    GreetingPolicy,
     is_pure_greeting,
     is_pure_followup,
     is_price_shock,

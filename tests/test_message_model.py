@@ -1,5 +1,4 @@
 """Tests for IncomingMessage — unified message type."""
-import pytest
 from dataclasses import asdict
 
 from src.models.message import IncomingMessage, Platform

@@ -10,9 +10,9 @@ Provides structured lifecycle management for persona tasks:
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Awaitable, Optional, Any
+from typing import Callable, Awaitable, Optional
 
 from ..utils.logger import get_logger
 

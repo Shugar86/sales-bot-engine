@@ -14,17 +14,16 @@ Tests organized by "Turing test dimension":
 import pytest
 import tempfile
 import os
-from unittest.mock import AsyncMock, MagicMock
 
 from src.core.router import MessageRouter, Decision
 from src.responders.generator import ResponseGenerator
 from src.responders.text_humanizer import TextHumanizer
-from src.responders.chat_vibe import ChatVibeDetector, ChatVibe, detect_chat_vibe
+from src.responders.chat_vibe import ChatVibe, detect_chat_vibe
 from src.monitors.anti_spam import RateLimiter, TypingSpeedCalculator
 from src.memory.user_memory import UserMemoryStore
 from src.utils.dedup import DeduplicationStore
 from src.utils.llm_client import LLMClient
-from src.core.persona_manager import load_persona, discover_personas
+from src.core.persona_manager import discover_personas
 
 
 # ========================================

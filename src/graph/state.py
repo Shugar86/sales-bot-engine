@@ -92,6 +92,9 @@ class PersonaState(TypedDict):
     error_message: Optional[str]
     """Error message if processing failed."""
 
+    parse_warnings: Annotated[list[str], operator.add]
+    """Non-fatal router parse issues (accumulated across nodes)."""
+
 
 def build_initial_state(msg: IncomingMessage) -> PersonaState:
     """Build initial state for a new message processing run.
@@ -127,4 +130,5 @@ def build_initial_state(msg: IncomingMessage) -> PersonaState:
         # Debug
         "node_history": [],
         "error_message": None,
+        "parse_warnings": [],
     }

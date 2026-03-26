@@ -4,14 +4,10 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 from src.core.router import (
-    MessageRouter, Decision, RouteResult,
-    GO_AWAY_PATTERNS, BOT_QUESTION_PATTERNS, SPAM_PATTERNS,
+    MessageRouter, Decision,
 )
 from src.responders.generator import (
-    ResponseGenerator, GeneratedResponse,
-    GO_AWAY_PATTERNS as GEN_GO_AWAY,
-    BOT_QUESTION_PATTERNS as GEN_BOT_Q,
-    FALLBACK_GROUP, FALLBACK_DM,
+    ResponseGenerator,
 )
 
 
@@ -122,8 +118,9 @@ class TestRouterPrefilters:
             success=True,
         )
         
-        result = await router.route("Какой корм лучше для овчарки?")
-        
+        route_result = await router.route("Какой корм лучше для овчарки?")
+        assert route_result.decision == Decision.RESPOND
+
         # LLM должен быть вызван
         mock_llm.call.assert_called_once()
 

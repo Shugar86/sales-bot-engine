@@ -1,6 +1,4 @@
 """Tests for funnel auto-progression signals."""
-import pytest
-import tempfile
 
 from src.memory.user_memory import UserMemoryStore
 

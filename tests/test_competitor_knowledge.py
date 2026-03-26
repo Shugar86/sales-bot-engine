@@ -1,6 +1,5 @@
 """Tests for competitor knowledge and persona loading."""
 import os
-import pytest
 
 from src.core.persona_manager import load_persona
 

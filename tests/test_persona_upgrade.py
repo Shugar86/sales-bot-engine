@@ -8,12 +8,9 @@ Tests the patterns ported from ai-tutor-engine:
 - All 3 personas have new format
 """
 
-import pytest
-import os
 from src.core.persona_manager import (
     load_persona,
     discover_personas,
-    PersonaConfig,
 )
 from src.core.vibe_schema import (
     VibePersona,

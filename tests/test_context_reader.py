@@ -1,5 +1,4 @@
 """Tests for Context Reader — v3 core module."""
-import pytest
 import time
 from src.core.context_reader import ContextReader, ChatContext, Message, VibeType
 

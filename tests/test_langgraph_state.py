@@ -6,10 +6,9 @@ Uses mocking for checkpointer or requires real Supabase test project.
 
 import os
 import pytest
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from src.graph.state import PersonaState, build_initial_state
+from src.graph.state import build_initial_state
 from src.models.message import IncomingMessage, Platform
 
 
@@ -46,6 +45,7 @@ class TestPersonaState:
         assert state["funnel_stage"] == "unknown"
         assert state["interaction_count"] == 0
         assert state["is_first_interaction"] is True
+        assert state["parse_warnings"] == []
 
     def test_state_is_mutable(self, sample_message):
         """State should be mutable for node updates."""
@@ -239,10 +239,9 @@ class TestCheckpointPersistence:
             config = {"configurable": {"thread_id": thread_id}}
             # Note: This is a simplified test, real usage would be through the graph
 
-            # Load checkpoint
-            loaded = await saver.aget(config)
+            # Load checkpoint (may be None if no prior save)
+            await saver.aget(config)
 
-            # If no previous checkpoint, should return None or empty
             # This test verifies the saver can connect and operate
 
         finally:

@@ -1,11 +1,10 @@
 """Tests for VK Monitor — message parsing."""
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from src.monitors.vk_monitor import (
     VKMessage,
     VKMonitor,
-    VK_AVAILABLE,
 )
 
 

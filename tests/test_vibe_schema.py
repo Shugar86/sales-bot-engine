@@ -1,8 +1,7 @@
 """Tests for Vibe Schema — Pydantic models."""
-import pytest
 from src.core.vibe_schema import (
     VibePersona, VibeBehavior, GreetingPolicy, OutputValidators,
-    ContextPolicy, PreprocessRules, AntiSpamConfig, MemoryConfig,
+    ContextPolicy, AntiSpamConfig, MemoryConfig,
     ResponseExample, RouterExample,
 )
 

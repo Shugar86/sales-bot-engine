@@ -14,7 +14,7 @@ from typing import Optional
 
 from ..utils.llm_client import LLMClient
 from ..utils.logger import get_logger
-from .chat_vibe import ChatVibe, VibeAnalysis
+from .chat_vibe import VibeAnalysis
 
 logger = get_logger("generator")
 

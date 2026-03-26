@@ -2,7 +2,7 @@
 import pytest
 import random
 from unittest.mock import patch
-from src.core.decision_gate import DecisionGate, Decision
+from src.core.decision_gate import DecisionGate
 from src.core.context_reader import ChatContext, Message
 from src.core.vibe_checker import VibeCheck
 

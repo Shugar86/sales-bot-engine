@@ -2,9 +2,7 @@
 import pytest
 import os
 import json
-import time
-import tempfile
-from src.core.memory_writer import MemoryWriter, UserMemoryProfile
+from src.core.memory_writer import MemoryWriter
 
 
 @pytest.fixture

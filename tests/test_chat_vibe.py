@@ -1,7 +1,6 @@
 """
 Tests for Chat Vibe Detector — detecting chat energy/tone
 """
-import pytest
 from src.responders.chat_vibe import ChatVibeDetector, ChatVibe, detect_chat_vibe
 
 

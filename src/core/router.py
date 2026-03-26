@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-from ..utils.llm_client import LLMClient, LLMResponse
+from ..utils.llm_client import LLMClient
 from ..utils.logger import get_logger
 
 logger = get_logger("router")
@@ -33,6 +33,7 @@ class RouteResult:
     reason: str                 # Почему так решил
     topic: Optional[str] = None # Тема сообщения
     keywords_matched: list = field(default_factory=list)
+    parse_failed: bool = False  # True if LLM output was not valid routable JSON/decision
 
 
 # === ПРЕД-ФИЛЬТРЫ (без LLM, мгновенно) ===
@@ -283,35 +284,90 @@ class MessageRouter:
         return self._parse_response(response.text)
     
     def _parse_response(self, text: str) -> RouteResult:
-        """Парсинг ответа модели"""
+        """Парсинг ответа модели.
+
+        Валидный маршрут: JSON с полем ``decision``, значение мапится на :class:`Decision`.
+        Иначе — ``parse_failed=True`` и ``IGNORE`` (не смешиваем с осознанным ignore из JSON).
+        """
+        raw_preview = (text or "")[:200]
         try:
-            text = text.strip()
+            text = (text or "").strip()
             if text.startswith("```"):
                 text = "\n".join(text.split("\n")[1:])
             if text.endswith("```"):
                 text = "\n".join(text.split("\n")[:-1])
             text = text.strip()
-            
+
             data = json.loads(text)
-            
-            decision_str = data.get("decision", "IGNORE").upper()
-            try:
-                decision = Decision(decision_str.lower())
-            except ValueError:
-                decision = Decision.IGNORE
-            
-            return RouteResult(
-                decision=decision,
-                confidence=float(data.get("confidence", 0.5)),
-                reason=data.get("reason", ""),
-                topic=data.get("topic"),
-                keywords_matched=data.get("keywords", []),
+        except json.JSONDecodeError as e:
+            logger.warning(
+                f"Router JSON parse failed: {e} | text (truncated): {raw_preview!r}"
             )
-            
-        except (json.JSONDecodeError, ValueError, KeyError) as e:
-            logger.warning(f"Failed to parse router response: {e} | text: {text[:200]}")
             return RouteResult(
                 decision=Decision.IGNORE,
                 confidence=0.0,
-                reason=f"Parse error: {e}",
+                reason=f"JSON decode error: {e}",
+                parse_failed=True,
             )
+
+        if "decision" not in data:
+            logger.warning(
+                f"Router response missing 'decision' | text (truncated): {raw_preview!r}"
+            )
+            return RouteResult(
+                decision=Decision.IGNORE,
+                confidence=0.0,
+                reason="missing decision field",
+                parse_failed=True,
+            )
+
+        decision_raw = data["decision"]
+        decision_str = str(decision_raw).strip().upper()
+        try:
+            decision = Decision(decision_str.lower())
+        except ValueError:
+            logger.warning(
+                f"Invalid router decision {decision_str!r} | text (truncated): {raw_preview!r}"
+            )
+            return RouteResult(
+                decision=Decision.IGNORE,
+                confidence=0.0,
+                reason=f"invalid decision: {decision_str}",
+                parse_failed=True,
+            )
+
+        try:
+            confidence = float(data.get("confidence", 0.5))
+        except (TypeError, ValueError) as e:
+            logger.warning(
+                f"Invalid router confidence {data.get('confidence')!r} | text: {raw_preview!r}"
+            )
+            return RouteResult(
+                decision=Decision.IGNORE,
+                confidence=0.0,
+                reason=f"invalid confidence: {e}",
+                parse_failed=True,
+            )
+
+        keywords = data.get("keywords", [])
+        if keywords is None:
+            keywords = []
+        if not isinstance(keywords, list):
+            logger.warning(
+                f"Router keywords not a list: {type(keywords).__name__} | text: {raw_preview!r}"
+            )
+            return RouteResult(
+                decision=Decision.IGNORE,
+                confidence=0.0,
+                reason="invalid keywords field",
+                parse_failed=True,
+            )
+
+        return RouteResult(
+            decision=decision,
+            confidence=confidence,
+            reason=str(data.get("reason", "")),
+            topic=data.get("topic"),
+            keywords_matched=keywords,
+            parse_failed=False,
+        )

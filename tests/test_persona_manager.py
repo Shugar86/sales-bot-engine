@@ -1,21 +1,11 @@
 """Tests for PersonaManager — v2 persona loading and discovery."""
 import pytest
 import yaml
-import os
-import tempfile
-import shutil
-from pathlib import Path
 
 from src.core.persona_manager import (
     load_persona,
     discover_personas,
     PersonaManager,
-    PersonaConfig,
-    TriggerConfig,
-    IgnoreConfig,
-    AntiSpamConfig,
-    GroupModeConfig,
-    DMModeConfig,
 )
 
 

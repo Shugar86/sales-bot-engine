@@ -10,14 +10,13 @@ import asyncio
 import os
 import re
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .vibe_schema import (
-    VibePersona, VibeBehavior, GreetingPolicy, OutputValidators,
-    ContextPolicy, AntiSpamConfig, MemoryConfig, ResponseExample,
+    VibePersona, VibeBehavior, GreetingPolicy, AntiSpamConfig, MemoryConfig, ResponseExample,
 )
 from ..utils.logger import get_logger
 from ..models.message import IncomingMessage

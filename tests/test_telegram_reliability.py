@@ -1,9 +1,6 @@
 """Tests for Telegram reliability features."""
 import asyncio
-import json
 import pytest
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.core.retry import RetryManager, TELEGRAM_SEND_POLICY
 
@@ -40,7 +37,7 @@ class TestTelegramMonitorReliability:
     @pytest.mark.asyncio
     async def test_send_message_retry(self):
         """Send message should retry on failure."""
-        from src.core.retry import retry_with_backoff, TELEGRAM_SEND_POLICY
+        from src.core.retry import retry_with_backoff
 
         attempt_count = 0
 
@@ -63,8 +60,7 @@ class TestTelegramMonitorReliability:
     @pytest.mark.asyncio
     async def test_rate_limit_handling(self):
         """Should handle 429 with Retry-After."""
-        import httpx
-        from src.core.retry import retry_with_backoff, TELEGRAM_SEND_POLICY
+        from src.core.retry import retry_with_backoff
 
         retry_after_received = []
 
@@ -174,7 +170,7 @@ class TestDedupSQLite:
         from src.utils.dedup import DeduplicationStore
 
         storage_path = tmp_path / "processed_messages.json"
-        store = DeduplicationStore(storage_path=str(storage_path))
+        DeduplicationStore(storage_path=str(storage_path))
 
         # Should create .db file instead of .json
         db_path = storage_path.with_suffix(".db")
@@ -183,7 +179,6 @@ class TestDedupSQLite:
     @pytest.mark.asyncio
     async def test_concurrent_safety(self, tmp_path):
         """SQLite backend should handle concurrent access with async lock."""
-        import sqlite3
         from src.utils.dedup import DeduplicationStore
 
         storage_path = tmp_path / "processed.json"
@@ -217,7 +212,6 @@ class TestDedupSQLite:
     @pytest.mark.asyncio
     async def test_cleanup_old_entries(self, tmp_path):
         """Should cleanup entries older than max_age_hours."""
-        import time
         from src.utils.dedup import DeduplicationStore
 
         store = DeduplicationStore(

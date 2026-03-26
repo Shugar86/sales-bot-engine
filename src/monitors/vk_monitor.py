@@ -110,7 +110,7 @@ class VKMonitor:
                 # User DM
                 user = self.vk.users.get(user_id=peer_id)
                 return f"{user[0]['first_name']} {user[0]['last_name']}" if user else f"User {peer_id}"
-        except:
+        except Exception:
             return str(peer_id)
     
     def _get_user_name(self, user_id: int) -> tuple[str, str]:
@@ -120,7 +120,7 @@ class VKMonitor:
             if users:
                 u = users[0]
                 return u.get("screen_name", ""), f"{u['first_name']} {u['last_name']}"
-        except:
+        except Exception:
             pass
         return "", f"User {user_id}"
     

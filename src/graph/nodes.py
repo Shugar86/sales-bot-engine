@@ -363,6 +363,9 @@ async def route_node(state: PersonaState, config: RunnableConfig) -> dict:
     }
     if map_error:
         result["error_message"] = map_error
+    if route_result.parse_failed:
+        reason = (route_result.reason or "").strip() or "router_parse_failed"
+        result["parse_warnings"] = [reason]
     return result
 
 

@@ -1,0 +1,2 @@
+# Dev / CI only
+ruff~=0.9.0

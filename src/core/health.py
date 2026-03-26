@@ -330,7 +330,6 @@ async def health_probe() -> int:
     Returns exit code 0 if healthy, 1 otherwise.
     Used by Docker healthcheck.
     """
-    import os
 
     health_file = Path("/tmp/sales-bot-health.json")
 

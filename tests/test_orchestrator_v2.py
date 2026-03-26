@@ -1,14 +1,14 @@
 """Tests for Orchestrator — multi-persona orchestrator."""
 import importlib
+import json
+import logging
 
 import pytest
-import json
 import yaml
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.core.orchestrator import SalesBotOrchestrator, PersonaRuntime, BotState
+from src.core.orchestrator import SalesBotOrchestrator
 from src.models.message import IncomingMessage, Platform
-from src.core.persona_manager import PersonaConfig, TriggerConfig
 from src.platforms.capabilities import PlatformCapabilities
 
 
@@ -80,8 +80,12 @@ def orchestrator(personas_dir, tmp_path):
 
 
 @pytest.fixture
-def mock_memory_and_graph():
+def mock_memory_and_graph(monkeypatch):
     """Avoid real Supabase and Postgres checkpointer during runtime build."""
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://postgres:test@localhost:5432/testdb",
+    )
     mem = AsyncMock()
     mem.close = AsyncMock()
     graph_mock = MagicMock()
@@ -303,6 +307,157 @@ class TestOrchestratorPipeline:
         await orchestrator._handle_message(msg, runtime)
 
         assert runtime.stats["messages_processed"] == first_count + 1
+
+
+class TestOrchestratorLegacyAndTrace:
+    """DATABASE_URL gating, legacy-only path, and message_trace logging."""
+
+    @pytest.mark.asyncio
+    async def test_no_database_url_skips_compile(self, orchestrator, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        graph_builder = importlib.import_module("src.graph.builder")
+        configs = orchestrator.load_personas()
+        with patch(
+            "src.core.orchestrator.MemoryFacade.create",
+            new_callable=AsyncMock,
+            return_value=AsyncMock(close=AsyncMock()),
+        ), patch.object(
+            graph_builder,
+            "compile_persona_graph",
+            new_callable=AsyncMock,
+        ) as compile_mock:
+            runtime = await orchestrator._build_runtime(configs[0])
+        compile_mock.assert_not_called()
+        assert runtime.legacy_message_path is True
+        assert runtime.graph is None
+        assert runtime.graph_compile_error is None
+
+    @pytest.mark.asyncio
+    async def test_database_url_compile_failure_not_legacy(self, orchestrator, monkeypatch):
+        monkeypatch.setenv(
+            "DATABASE_URL",
+            "postgresql://postgres:test@localhost:5432/testdb",
+        )
+        graph_builder = importlib.import_module("src.graph.builder")
+        configs = orchestrator.load_personas()
+        with patch(
+            "src.core.orchestrator.MemoryFacade.create",
+            new_callable=AsyncMock,
+            return_value=AsyncMock(close=AsyncMock()),
+        ), patch.object(
+            graph_builder,
+            "compile_persona_graph",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("checkpointer failed"),
+        ):
+            runtime = await orchestrator._build_runtime(configs[0])
+        assert runtime.legacy_message_path is False
+        assert runtime.graph is None
+        assert runtime.graph_compile_error == "checkpointer failed"
+
+    @pytest.mark.asyncio
+    async def test_compile_failure_handle_message_error_path(
+        self, orchestrator, monkeypatch
+    ):
+        """With DATABASE_URL but no graph, must not run legacy handler."""
+        monkeypatch.setenv(
+            "DATABASE_URL",
+            "postgresql://postgres:test@localhost:5432/testdb",
+        )
+        graph_builder = importlib.import_module("src.graph.builder")
+        configs = orchestrator.load_personas()
+        mem = AsyncMock()
+        mem.close = AsyncMock()
+        mem.mark_processed = AsyncMock()
+        with patch(
+            "src.core.orchestrator.MemoryFacade.create",
+            new_callable=AsyncMock,
+            return_value=mem,
+        ), patch.object(
+            graph_builder,
+            "compile_persona_graph",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("checkpointer failed"),
+        ):
+            runtime = await orchestrator._build_runtime(configs[0])
+
+        assert runtime.graph is None
+        assert runtime.legacy_message_path is False
+
+        legacy_mock = AsyncMock()
+        msg = IncomingMessage(
+            message_id=1,
+            chat_id="-100123",
+            chat_title="Test Chat",
+            user_id="500",
+            username="u",
+            display_name="U",
+            text="hi",
+            is_dm=False,
+            date=1700000000,
+            platform=Platform.TELEGRAM_USERBOT,
+        )
+
+        with patch.object(orchestrator, "_handle_message_legacy", legacy_mock):
+            await orchestrator._handle_message(msg, runtime)
+
+        legacy_mock.assert_not_called()
+        mem.mark_processed.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_message_trace_json_on_graph_path(
+        self, orchestrator, mock_memory_and_graph, caplog
+    ):
+        configs = orchestrator.load_personas()
+        runtime = await orchestrator._build_runtime(configs[0])
+        orchestrator.runtimes["TestBot"] = runtime
+
+        _, graph_mock = mock_memory_and_graph
+        graph_mock.ainvoke = AsyncMock(
+            return_value={
+                "sent": True,
+                "route_decision": "respond",
+                "node_history": ["dedup", "route", "send"],
+            }
+        )
+
+        runtime.adapter = _make_mock_adapter()
+
+        msg = IncomingMessage(
+            message_id=1,
+            chat_id="-100123",
+            chat_title="Test Chat",
+            user_id="500",
+            username="testuser",
+            display_name="Test User",
+            text="Тестовое сообщение",
+            is_dm=False,
+            date=1700000000,
+            platform=Platform.TELEGRAM_USERBOT,
+        )
+
+        with caplog.at_level(logging.INFO, logger="sales_bot.orchestrator"):
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                await orchestrator._handle_message(msg, runtime)
+
+        trace_records = []
+        for r in caplog.records:
+            if r.name != "sales_bot.orchestrator":
+                continue
+            try:
+                payload = json.loads(r.getMessage())
+            except json.JSONDecodeError:
+                continue
+            if payload.get("event") == "message_trace":
+                trace_records.append(payload)
+
+        assert trace_records, "expected message_trace log line"
+        last = trace_records[-1]
+        assert last["path"] == "graph"
+        assert last["decision"] == "respond"
+        assert last["nodes"] == "dedup->route->send"
+        assert last["user_id"] == "500"
+        assert "latency_ms" in last
 
 
 class TestOrchestratorStatus:

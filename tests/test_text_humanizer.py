@@ -1,5 +1,4 @@
 """Tests for Text Humanizer."""
-import pytest
 import random
 
 from src.responders.text_humanizer import TextHumanizer, humanize_text

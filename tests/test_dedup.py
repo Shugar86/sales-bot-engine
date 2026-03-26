@@ -1,8 +1,6 @@
 """Tests for enhanced deduplication and conversation tracking (async version)."""
 import pytest
 import time
-import tempfile
-import os
 import asyncio
 
 from src.utils.dedup import DeduplicationStore

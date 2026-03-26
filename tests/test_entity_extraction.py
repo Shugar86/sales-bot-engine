@@ -1,5 +1,4 @@
 """Tests for entity extraction and response examples."""
-import pytest
 import tempfile
 import os
 
@@ -8,9 +7,8 @@ from src.memory.user_memory import (
     _extract_dog_info,
     _extract_fitness_info,
     _extract_generic_info,
-    ENTITY_EXTRACTORS,
 )
-from src.core.persona_manager import load_persona, ResponseExample
+from src.core.persona_manager import load_persona
 
 
 class TestDogEntityExtractor:

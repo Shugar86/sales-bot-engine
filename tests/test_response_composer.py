@@ -11,7 +11,6 @@ Tests the patterns ported from ai-tutor-engine:
 - Banned phrase filtering
 """
 
-import pytest
 from src.responders.response_composer import (
     is_pure_greeting,
     looks_like_greeting,

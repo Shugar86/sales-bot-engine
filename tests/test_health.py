@@ -2,7 +2,6 @@
 import asyncio
 import json
 import pytest
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.core.health import (
@@ -255,7 +254,6 @@ class TestHealthProbeCLI:
     @pytest.mark.asyncio
     async def test_health_probe_returns_0_when_healthy(self, tmp_path):
         """CLI should return 0 when healthy."""
-        from src.core.health import health_probe
 
         health_file = tmp_path / "health.json"
         health_file.write_text(json.dumps({"status": "healthy"}))

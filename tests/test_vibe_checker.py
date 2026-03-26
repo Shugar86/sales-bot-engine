@@ -1,6 +1,6 @@
 """Tests for Vibe Checker — v3 core module."""
 import pytest
-from src.core.vibe_checker import VibeChecker, VibeCheck
+from src.core.vibe_checker import VibeChecker
 from src.core.context_reader import ChatContext, Message, VibeType
 
 

@@ -9,7 +9,6 @@ Applies subtle modifications:
 """
 
 import random
-import re
 from typing import Optional
 
 

@@ -20,7 +20,6 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
 
 
 @dataclass
@@ -127,7 +126,7 @@ class MemoryWriter:
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(self._cache[user_id], f, ensure_ascii=False, indent=2)
-        except Exception as e:
+        except Exception:
             pass  # Fail silently in memory writes
     
     def write_group_interaction(

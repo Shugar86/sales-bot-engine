@@ -13,8 +13,7 @@ Features:
 import asyncio
 import os
 import random
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 from ..utils.logger import get_logger
@@ -25,7 +24,6 @@ logger = get_logger("telegram-userbot")
 # Telethon is optional — import gracefully
 try:
     from telethon import TelegramClient, events
-    from telethon.tl.types import Channel, Chat, User
     TELETHON_AVAILABLE = True
 except ImportError:
     TELETHON_AVAILABLE = False

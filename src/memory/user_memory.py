@@ -205,7 +205,7 @@ class UserMemoryStore:
         self._conn.commit()
 
         self._extractor = self._get_extractor()
-        self._db_lock = asyncio.Lock() if False else None  # Not used but reserved for future async
+        self._db_lock = None  # reserved for future async serialization
 
     def _execute_with_retry(self, sql: str, parameters: tuple = None, max_retries: int = 3) -> sqlite3.Cursor:
         """Execute SQL with retry on database locked error."""

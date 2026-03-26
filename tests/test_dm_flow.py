@@ -1,9 +1,7 @@
 """
 Tests for DM Conversation Flow improvements
 """
-import pytest
 import tempfile
-import os
 from src.memory.user_memory import UserMemoryStore
 
 

@@ -10,10 +10,8 @@ Features:
 
 import hashlib
 import os
-from functools import lru_cache
 from typing import List, Optional
 
-import numpy as np
 
 from ..utils.logger import get_logger
 

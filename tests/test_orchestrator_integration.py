@@ -14,21 +14,9 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from src.core.orchestrator import (
     SalesBotOrchestrator,
     PersonaRuntime,
-    BotState,
 )
 from src.core.persona_manager import (
     load_persona,
-    PersonaConfig,
-    TriggerConfig,
-    IgnoreConfig,
-    GroupModeConfig,
-    DMModeConfig,
-)
-from src.core.vibe_schema import (
-    VibePersona,
-    VibeBehavior,
-    GreetingPolicy,
-    AntiSpamConfig,
 )
 from src.responders.response_composer import ResponseComposer, GreetingPolicy
 from src.responders.preprocess import PreprocessNode
@@ -36,8 +24,12 @@ from src.responders.anaphora_resolver import AnaphoraResolver
 
 
 @pytest.fixture
-def mock_memory_and_graph():
+def mock_memory_and_graph(monkeypatch):
     """Avoid real Supabase and Postgres checkpointer when building runtime."""
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://postgres:test@localhost:5432/testdb",
+    )
     mem = AsyncMock()
     mem.close = AsyncMock()
     graph_mock = MagicMock()
@@ -96,8 +88,8 @@ class TestPersonaRuntimeNewComponents:
         # The stats default_factory should include these
         field = PersonaRuntime.__dataclass_fields__["stats"]
         result = field.default_factory()
-        assert "preprocess_shortcuts" in result
-        assert "greeting_skips" in result
+        for key, expected in default_stats.items():
+            assert result[key] == expected
 
 
 # ══════════════════════════════════════════════════════════════

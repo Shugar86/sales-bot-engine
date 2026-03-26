@@ -14,8 +14,8 @@ Environment:
 import hashlib
 import json
 import os
-from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from dataclasses import dataclass
+from typing import List, Optional
 
 import asyncpg
 

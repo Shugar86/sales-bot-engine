@@ -1,8 +1,10 @@
 """Tests for MessageRouter"""
-import pytest
 import json
+import logging
+
+import pytest
 from unittest.mock import AsyncMock, MagicMock
-from src.core.router import MessageRouter, Decision, RouteResult
+from src.core.router import MessageRouter, Decision
 
 
 @pytest.fixture
@@ -175,8 +177,25 @@ class TestRouterParseResponse:
         
         assert result.decision == Decision.IGNORE
     
-    def test_parse_invalid_returns_ignore(self, router):
-        result = router._parse_response("completely broken {[}")
-        
+    def test_parse_invalid_returns_ignore(self, router, caplog):
+        with caplog.at_level(logging.WARNING, logger="sales_bot.router"):
+            result = router._parse_response("completely broken {[}")
+
         assert result.decision == Decision.IGNORE
         assert result.confidence == 0.0
+        assert result.parse_failed is True
+        assert any("json parse failed" in r.message.lower() for r in caplog.records)
+
+    def test_parse_explicit_ignore_not_parse_failed(self, router):
+        text = '{"decision": "IGNORE", "confidence": 0.9, "reason": "spam"}'
+        result = router._parse_response(text)
+        assert result.decision == Decision.IGNORE
+        assert result.parse_failed is False
+
+    def test_parse_invalid_decision_sets_parse_failed(self, router, caplog):
+        text = '{"decision": "MAYBE", "confidence": 0.5, "reason": "x", "keywords": []}'
+        with caplog.at_level(logging.WARNING, logger="sales_bot.router"):
+            result = router._parse_response(text)
+        assert result.parse_failed is True
+        assert result.decision == Decision.IGNORE
+        assert any("invalid router decision" in r.message.lower() for r in caplog.records)

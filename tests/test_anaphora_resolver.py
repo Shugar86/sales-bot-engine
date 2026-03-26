@@ -10,9 +10,7 @@ Tests the patterns ported from ai-tutor-engine:
 import pytest
 from src.responders.anaphora_resolver import (
     AnaphoraResolver,
-    AnaphoraResult,
     ConversationContext,
-    ANAPHORA_TRIGGERS,
 )
 
 

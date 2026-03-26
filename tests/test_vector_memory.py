@@ -6,7 +6,7 @@ Uses mocking for database operations or requires real Supabase test project.
 
 import os
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from src.memory.supabase_memory import SupabaseMemory, SupabaseMemoryConfig
 from src.memory.embeddings import EmbeddingProvider

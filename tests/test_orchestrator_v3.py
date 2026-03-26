@@ -4,14 +4,9 @@ Tests for v3 Pipeline Modules (ContextReader, VibeChecker, DecisionGate, MemoryW
 These modules provide experimental pipeline components that can be used for future
 enhancements. They are tested in isolation and kept as extension points.
 """
-import pytest
-import json
-import os
-import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
-from src.core.context_reader import ContextReader, ChatContext
-from src.core.vibe_checker import VibeChecker, VibeCheck
-from src.core.decision_gate import DecisionGate, Decision
+from src.core.context_reader import ContextReader
+from src.core.vibe_checker import VibeChecker
+from src.core.decision_gate import DecisionGate
 from src.core.memory_writer import MemoryWriter
 
 

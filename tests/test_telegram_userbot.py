@@ -6,7 +6,6 @@ from datetime import datetime
 from src.monitors.telegram_userbot import (
     UserbotMessage,
     TelegramUserbot,
-    TELETHON_AVAILABLE,
 )
 
 

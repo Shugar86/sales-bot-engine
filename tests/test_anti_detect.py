@@ -1,8 +1,6 @@
 """Tests for new anti-detect features: leave-on-read, emoji reactions, time-awareness."""
-import pytest
 import random
-from unittest.mock import patch, MagicMock
-from datetime import datetime
+from unittest.mock import patch
 
 from src.monitors.anti_spam import RateLimiter
 

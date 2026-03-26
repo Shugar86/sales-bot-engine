@@ -12,7 +12,7 @@ import random
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Awaitable, Optional, TypeVar, Any
+from typing import Callable, Awaitable, Optional, TypeVar
 
 from ..utils.logger import get_logger
 
@@ -91,7 +91,7 @@ class CircuitBreaker:
             result = await fn()
             await self._on_success()
             return result
-        except Exception as e:
+        except Exception:
             await self._on_failure()
             raise
 

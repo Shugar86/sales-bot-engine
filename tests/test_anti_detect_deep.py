@@ -2,8 +2,7 @@
 Tests for Anti-Detect Deep features — typing speed, contextual leave-on-read, activity patterns
 """
 import pytest
-import time
-from src.monitors.anti_spam import RateLimiter
+from src.monitors.anti_spam import RateLimiter, TypingSpeedCalculator
 
 
 class TestTypingSpeedCalculator:
@@ -198,6 +197,3 @@ class TestConversationThreading:
                 "Хороший корм"
             ) is False
 
-
-# Need to import TypingSpeedCalculator
-from src.monitors.anti_spam import TypingSpeedCalculator

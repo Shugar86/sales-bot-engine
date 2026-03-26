@@ -1,6 +1,6 @@
 """Tests for Output Validators — banned phrases and greeting policy."""
 import pytest
-from src.core.output_validators import OutputValidator, ValidationResult
+from src.core.output_validators import OutputValidator
 from src.core.vibe_schema import OutputValidators as ValidatorsConfig, GreetingPolicy
 
 

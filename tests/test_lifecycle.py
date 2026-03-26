@@ -1,7 +1,6 @@
 """Tests for lifecycle management and task supervision."""
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 from src.core.lifecycle import (
     PersonaSupervisor,

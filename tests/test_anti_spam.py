@@ -1,6 +1,5 @@
 """Tests for Anti-Spam RateLimiter."""
 import pytest
-import time
 from unittest.mock import AsyncMock
 
 from src.monitors.anti_spam import RateLimiter
