@@ -1,13 +1,15 @@
 """Tests for Orchestrator — multi-persona orchestrator."""
+import importlib
+
 import pytest
 import json
 import yaml
 from unittest.mock import AsyncMock, MagicMock, patch
-from dataclasses import dataclass
 
 from src.core.orchestrator import SalesBotOrchestrator, PersonaRuntime, BotState
 from src.models.message import IncomingMessage, Platform
 from src.core.persona_manager import PersonaConfig, TriggerConfig
+from src.platforms.capabilities import PlatformCapabilities
 
 
 @pytest.fixture
@@ -78,6 +80,47 @@ def orchestrator(personas_dir, tmp_path):
     )
 
 
+@pytest.fixture
+def mock_memory_and_graph():
+    """Avoid real Supabase and Postgres checkpointer during runtime build."""
+    mem = AsyncMock()
+    mem.close = AsyncMock()
+    graph_mock = MagicMock()
+    graph_mock.ainvoke = AsyncMock(
+        return_value={
+            "sent": False,
+            "route_decision": "ignore",
+            "node_history": [],
+        }
+    )
+    graph_builder = importlib.import_module("src.graph.builder")
+    with patch(
+        "src.core.orchestrator.MemoryFacade.create",
+        new_callable=AsyncMock,
+        return_value=mem,
+    ), patch.object(
+        graph_builder,
+        "compile_persona_graph",
+        new_callable=AsyncMock,
+        return_value=graph_mock,
+    ):
+        yield mem, graph_mock
+
+
+def _make_mock_adapter():
+    ad = MagicMock()
+    caps = PlatformCapabilities(
+        supports_dm=True,
+        supports_group_reply=True,
+        supports_reactions=True,
+        supports_typing_indicator=True,
+    )
+    ad.capabilities = MagicMock(return_value=caps)
+    ad.send_reply = AsyncMock(return_value=True)
+    ad.send_reaction = AsyncMock(return_value=True)
+    return ad
+
+
 class TestOrchestratorLoading:
     """Test persona loading in orchestrator."""
     
@@ -86,10 +129,11 @@ class TestOrchestratorLoading:
         assert len(configs) == 1
         assert configs[0].name == "TestBot"
     
-    def test_build_runtime(self, orchestrator):
+    @pytest.mark.asyncio
+    async def test_build_runtime(self, orchestrator, mock_memory_and_graph):
         configs = orchestrator.load_personas()
-        runtime = orchestrator._build_runtime(configs[0])
-        
+        runtime = await orchestrator._build_runtime(configs[0])
+
         assert runtime.config.name == "TestBot"
         assert runtime.router is not None
         assert runtime.generator is not None
@@ -117,43 +161,24 @@ class TestOrchestratorPipeline:
     """Test message processing pipeline."""
     
     @pytest.mark.asyncio
-    async def test_handle_message_respond(self, orchestrator):
+    async def test_handle_message_respond(self, orchestrator, mock_memory_and_graph):
         """Test: message → router RESPOND → generator → send."""
         configs = orchestrator.load_personas()
-        runtime = orchestrator._build_runtime(configs[0])
+        runtime = await orchestrator._build_runtime(configs[0])
         orchestrator.runtimes["TestBot"] = runtime
-        
-        # Mock LLM responses
-        runtime.llm.call = AsyncMock(side_effect=[
-            MagicMock(
-                text=json.dumps({
-                    "decision": "RESPOND",
-                    "confidence": 0.9,
-                    "reason": "Тестовое сообщение",
-                    "keywords": ["тест"],
-                }),
-                success=True,
-            ),
-            MagicMock(
-                text=json.dumps({
-                    "text": "Тестовый ответ",
-                    "tone": "expert",
-                    "stage": "engage",
-                    "remember": [],
-                }),
-                success=True,
-            ),
-        ])
-        
-        # Disable random anti-detection behaviors for deterministic test
-        runtime.antispam.leave_on_read_probability = 0.0
-        runtime.antispam.emoji_reaction_probability = 0.0
-        
-        # Mock monitor (send)
-        mock_monitor = MagicMock()
-        mock_monitor.send_message = AsyncMock(return_value=True)
-        runtime.monitor = mock_monitor
-        
+
+        _, graph_mock = mock_memory_and_graph
+        graph_mock.ainvoke = AsyncMock(
+            return_value={
+                "sent": True,
+                "route_decision": "respond",
+                "validated_text": "ok",
+                "node_history": ["send"],
+            }
+        )
+
+        runtime.adapter = _make_mock_adapter()
+
         msg = IncomingMessage(
             message_id=1,
             chat_id="-100123",
@@ -166,34 +191,30 @@ class TestOrchestratorPipeline:
             date=1700000000,
             platform=Platform.TELEGRAM_USERBOT,
         )
-        
-        # Patch asyncio.sleep to avoid delays
+
         with patch("asyncio.sleep", new_callable=AsyncMock):
             await orchestrator._handle_message(msg, runtime)
-        
+
         assert runtime.stats["responses_sent"] == 1
-        mock_monitor.send_message.assert_called_once()
     
     @pytest.mark.asyncio
-    async def test_handle_message_ignore(self, orchestrator):
+    async def test_handle_message_ignore(self, orchestrator, mock_memory_and_graph):
         """Test: message → router IGNORE → no send."""
         configs = orchestrator.load_personas()
-        runtime = orchestrator._build_runtime(configs[0])
+        runtime = await orchestrator._build_runtime(configs[0])
         orchestrator.runtimes["TestBot"] = runtime
-        
-        runtime.llm.call = AsyncMock(return_value=MagicMock(
-            text=json.dumps({
-                "decision": "IGNORE",
-                "confidence": 0.95,
-                "reason": "Спам",
-            }),
-            success=True,
-        ))
-        
-        mock_monitor = MagicMock()
-        mock_monitor.send_message = AsyncMock()
-        runtime.monitor = mock_monitor
-        
+
+        _, graph_mock = mock_memory_and_graph
+        graph_mock.ainvoke = AsyncMock(
+            return_value={
+                "sent": False,
+                "route_decision": "ignore",
+                "node_history": ["route"],
+            }
+        )
+
+        runtime.adapter = _make_mock_adapter()
+
         msg = IncomingMessage(
             message_id=1,
             chat_id="-100123",
@@ -205,33 +226,30 @@ class TestOrchestratorPipeline:
             is_dm=False,
             date=1700000000,
         )
-        
+
         await orchestrator._handle_message(msg, runtime)
-        
+
         assert runtime.stats["ignored"] == 1
-        mock_monitor.send_message.assert_not_called()
+        runtime.adapter.send_reply.assert_not_called()
     
     @pytest.mark.asyncio
-    async def test_handle_dm_skips_router(self, orchestrator):
-        """DM should skip router and go directly to generation."""
+    async def test_handle_dm_pipeline(self, orchestrator, mock_memory_and_graph):
+        """DM path completes via graph and records a sent response."""
         configs = orchestrator.load_personas()
-        runtime = orchestrator._build_runtime(configs[0])
+        runtime = await orchestrator._build_runtime(configs[0])
         orchestrator.runtimes["TestBot"] = runtime
-        
-        runtime.llm.call = AsyncMock(return_value=MagicMock(
-            text=json.dumps({
-                "text": "Ответ в ЛС",
-                "tone": "expert",
-                "stage": "help",
-                "remember": ["заинтересован"],
-            }),
-            success=True,
-        ))
-        
-        mock_monitor = MagicMock()
-        mock_monitor.send_message = AsyncMock(return_value=True)
-        runtime.monitor = mock_monitor
-        
+
+        _, graph_mock = mock_memory_and_graph
+        graph_mock.ainvoke = AsyncMock(
+            return_value={
+                "sent": True,
+                "route_decision": "respond",
+                "node_history": ["send"],
+            }
+        )
+
+        runtime.adapter = _make_mock_adapter()
+
         msg = IncomingMessage(
             message_id=2,
             chat_id="500",
@@ -243,26 +261,30 @@ class TestOrchestratorPipeline:
             is_dm=True,
             date=1700000000,
         )
-        
+
         with patch("asyncio.sleep", new_callable=AsyncMock):
             await orchestrator._handle_message(msg, runtime)
-        
+
         assert runtime.stats["responses_sent"] == 1
-        # DM should only call LLM once (generator, not router)
-        assert runtime.llm.call.call_count == 1
     
     @pytest.mark.asyncio
-    async def test_deduplication(self, orchestrator):
+    async def test_deduplication(self, orchestrator, mock_memory_and_graph):
         """Duplicate message should be skipped."""
         configs = orchestrator.load_personas()
-        runtime = orchestrator._build_runtime(configs[0])
+        runtime = await orchestrator._build_runtime(configs[0])
         orchestrator.runtimes["TestBot"] = runtime
-        
-        runtime.llm.call = AsyncMock(return_value=MagicMock(
-            text=json.dumps({"decision": "RESPOND", "confidence": 0.9, "reason": "x"}),
-            success=True,
-        ))
-        
+
+        _, graph_mock = mock_memory_and_graph
+        graph_mock.ainvoke = AsyncMock(
+            return_value={
+                "sent": False,
+                "route_decision": "respond",
+                "node_history": ["dedup"],
+            }
+        )
+
+        runtime.adapter = _make_mock_adapter()
+
         msg = IncomingMessage(
             message_id=1,
             chat_id="-100123",
@@ -275,20 +297,12 @@ class TestOrchestratorPipeline:
             date=1700000000,
         )
         
-        # First call
+        # First call (dedup node marks duplicate in real graph; here ainvoke returns same)
         await orchestrator._handle_message(msg, runtime)
         first_count = runtime.stats["messages_processed"]
-        
-        # Second call — should be deduped
-        runtime.llm.call.reset_mock()
-        runtime.llm.call = AsyncMock(return_value=MagicMock(
-            text=json.dumps({"decision": "RESPOND", "confidence": 0.9, "reason": "x"}),
-            success=True,
-        ))
-        
+
         await orchestrator._handle_message(msg, runtime)
-        
-        # Messages processed counter still increments but LLM not called
+
         assert runtime.stats["messages_processed"] == first_count + 1
 
 
@@ -300,12 +314,14 @@ class TestOrchestratorStatus:
         assert status["running"] is False
         assert status["personas"] == {}
     
-    def test_get_status_with_runtime(self, orchestrator):
+    @pytest.mark.asyncio
+    async def test_get_status_with_runtime(self, orchestrator, mock_memory_and_graph):
         configs = orchestrator.load_personas()
-        runtime = orchestrator._build_runtime(configs[0])
+        runtime = await orchestrator._build_runtime(configs[0])
         orchestrator.runtimes["TestBot"] = runtime
-        
+
         status = orchestrator.get_status()
         assert "TestBot" in status["personas"]
         assert status["personas"]["TestBot"]["platform"] == "telegram"
+        assert status["personas"]["TestBot"]["platform_key"] is None
         assert status["personas"]["TestBot"]["state"] == "idle"

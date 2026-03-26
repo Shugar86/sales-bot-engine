@@ -1,17 +1,41 @@
 """Tests for persona runtime isolation."""
 import asyncio
+import importlib
+
 import pytest
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.core.orchestrator import SalesBotOrchestrator, PersonaRuntime
 from src.core.persona_manager import PersonaConfig, AntiSpamConfig, GroupModeConfig
 
 
+@pytest.fixture
+def mock_memory_and_graph():
+    """Stub Supabase memory and LangGraph compile for fast runtime builds."""
+    graph_builder = importlib.import_module("src.graph.builder")
+    graph_mock = MagicMock()
+    graph_mock.ainvoke = AsyncMock(return_value={})
+
+    async def _make_memory(persona_name: str = ""):
+        m = AsyncMock()
+        m.close = AsyncMock()
+        m.persona_name = persona_name
+        return m
+
+    with patch.object(
+        graph_builder,
+        "compile_persona_graph",
+        new_callable=AsyncMock,
+        return_value=graph_mock,
+    ):
+        yield _make_memory
+
+
 class TestPersonaIsolation:
     """Tests that personas are properly isolated."""
 
-    def test_runtimes_have_independent_memory(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_runtimes_have_independent_memory(self, tmp_path, mock_memory_and_graph):
         """Each persona should have its own memory directory."""
         orchestrator = SalesBotOrchestrator(
             personas_dir=str(tmp_path / "personas"),
@@ -31,18 +55,24 @@ class TestPersonaIsolation:
             group_mode=GroupModeConfig(max_messages_per_hour=10),
         )
 
-        # Build runtimes
-        runtime1 = orchestrator._build_runtime(config1)
-        runtime2 = orchestrator._build_runtime(config2)
+        _make_memory = mock_memory_and_graph
 
-        # Memory stores should be different instances
+        async def fake_create(persona_name: str, **kw):
+            return await _make_memory(persona_name)
+
+        with patch(
+            "src.core.orchestrator.MemoryFacade.create",
+            side_effect=fake_create,
+        ):
+            runtime1 = await orchestrator._build_runtime(config1)
+            runtime2 = await orchestrator._build_runtime(config2)
+
+        # Memory facades should be different instances
         assert runtime1.memory is not runtime2.memory
+        assert runtime1.memory.persona_name != runtime2.memory.persona_name
 
-        # Memory directories should be different
-        assert "persona_one" in runtime1.memory.memory_dir.lower()
-        assert "persona_two" in runtime2.memory.memory_dir.lower()
-
-    def test_runtimes_have_independent_dedup(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_runtimes_have_independent_dedup(self, tmp_path, mock_memory_and_graph):
         """Each persona should have its own dedup store."""
         orchestrator = SalesBotOrchestrator(
             personas_dir=str(tmp_path / "personas"),
@@ -61,13 +91,23 @@ class TestPersonaIsolation:
             group_mode=GroupModeConfig(max_messages_per_hour=10),
         )
 
-        runtime1 = orchestrator._build_runtime(config1)
-        runtime2 = orchestrator._build_runtime(config2)
+        _make_memory = mock_memory_and_graph
+
+        async def fake_create(persona_name: str, **kw):
+            return await _make_memory(persona_name)
+
+        with patch(
+            "src.core.orchestrator.MemoryFacade.create",
+            side_effect=fake_create,
+        ):
+            runtime1 = await orchestrator._build_runtime(config1)
+            runtime2 = await orchestrator._build_runtime(config2)
 
         # Dedup stores should be different instances
         assert runtime1.dedup is not runtime2.dedup
 
-    def test_runtimes_have_independent_antispam(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_runtimes_have_independent_antispam(self, tmp_path, mock_memory_and_graph):
         """Each persona should have its own rate limiter."""
         orchestrator = SalesBotOrchestrator(
             personas_dir=str(tmp_path / "personas"),
@@ -86,8 +126,17 @@ class TestPersonaIsolation:
             group_mode=GroupModeConfig(max_messages_per_hour=10),
         )
 
-        runtime1 = orchestrator._build_runtime(config1)
-        runtime2 = orchestrator._build_runtime(config2)
+        _make_memory = mock_memory_and_graph
+
+        async def fake_create(persona_name: str, **kw):
+            return await _make_memory(persona_name)
+
+        with patch(
+            "src.core.orchestrator.MemoryFacade.create",
+            side_effect=fake_create,
+        ):
+            runtime1 = await orchestrator._build_runtime(config1)
+            runtime2 = await orchestrator._build_runtime(config2)
 
         # Anti-spam should be different instances
         assert runtime1.antispam is not runtime2.antispam
@@ -96,7 +145,8 @@ class TestPersonaIsolation:
         assert runtime1.antispam.min_delay_sec == 10
         assert runtime2.antispam.min_delay_sec == 20
 
-    def test_runtimes_have_independent_llm_clients(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_runtimes_have_independent_llm_clients(self, tmp_path, mock_memory_and_graph):
         """Each persona should have its own LLM client."""
         orchestrator = SalesBotOrchestrator(
             personas_dir=str(tmp_path / "personas"),
@@ -115,8 +165,17 @@ class TestPersonaIsolation:
             group_mode=GroupModeConfig(max_messages_per_hour=10),
         )
 
-        runtime1 = orchestrator._build_runtime(config1)
-        runtime2 = orchestrator._build_runtime(config2)
+        _make_memory = mock_memory_and_graph
+
+        async def fake_create(persona_name: str, **kw):
+            return await _make_memory(persona_name)
+
+        with patch(
+            "src.core.orchestrator.MemoryFacade.create",
+            side_effect=fake_create,
+        ):
+            runtime1 = await orchestrator._build_runtime(config1)
+            runtime2 = await orchestrator._build_runtime(config2)
 
         # LLM clients should be different instances
         assert runtime1.llm is not runtime2.llm
@@ -226,10 +285,10 @@ class TestPersonaResourceCleanup:
         # Create a mock runtime
         runtime = MagicMock()
         runtime.config.name = "test"
-        runtime.monitor = MagicMock()
-        runtime.monitor.stop = AsyncMock()
+        runtime.adapter = MagicMock()
+        runtime.adapter.stop = AsyncMock()
         runtime.llm.close = AsyncMock()
-        runtime.memory.close = MagicMock()
+        runtime.memory.close = AsyncMock()
 
         orchestrator.runtimes["test"] = runtime
 
@@ -237,7 +296,7 @@ class TestPersonaResourceCleanup:
         await orchestrator.stop()
 
         # Cleanup should have been called
-        runtime.monitor.stop.assert_called_once()
+        runtime.adapter.stop.assert_called_once()
         runtime.llm.close.assert_called_once()
         runtime.memory.close.assert_called_once()
 
@@ -245,7 +304,8 @@ class TestPersonaResourceCleanup:
 class TestPersonaStatus:
     """Tests for persona status reporting."""
 
-    def test_get_status_includes_all_personas(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_get_status_includes_all_personas(self, tmp_path, mock_memory_and_graph):
         """Status should include all personas."""
         orchestrator = SalesBotOrchestrator(
             personas_dir=str(tmp_path / "personas"),
@@ -253,17 +313,25 @@ class TestPersonaStatus:
             openrouter_api_key="test",
         )
 
-        # Create mock runtimes
-        for name in ["p1", "p2", "p3"]:
-            config = PersonaConfig(
-                name=name,
-                platform="telegram",
-                account_type="userbot",
-                anti_spam=AntiSpamConfig(),
-                group_mode=GroupModeConfig(max_messages_per_hour=10),
-            )
-            runtime = orchestrator._build_runtime(config)
-            orchestrator.runtimes[name] = runtime
+        _make_memory = mock_memory_and_graph
+
+        async def fake_create(persona_name: str, **kw):
+            return await _make_memory(persona_name)
+
+        with patch(
+            "src.core.orchestrator.MemoryFacade.create",
+            side_effect=fake_create,
+        ):
+            for name in ["p1", "p2", "p3"]:
+                config = PersonaConfig(
+                    name=name,
+                    platform="telegram",
+                    account_type="userbot",
+                    anti_spam=AntiSpamConfig(),
+                    group_mode=GroupModeConfig(max_messages_per_hour=10),
+                )
+                runtime = await orchestrator._build_runtime(config)
+                orchestrator.runtimes[name] = runtime
 
         status = orchestrator.get_status()
 

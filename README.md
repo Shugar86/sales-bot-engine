@@ -17,17 +17,21 @@
 ```
 ┌─────────────────────────────────────────┐
 │         Orchestrator                    │
-│  (multi-persona swarm, production)    │
+│  (multi-persona swarm, production)      │
 ├──────────┬──────────┬──────────┬───────┤
 │ Persona 1│ Persona 2│ Persona 3│  ...  │
 │ Кормовед │ Фитнес   │ SMM      │       │
 ├──────────┴──────────┴──────────┴───────┤
-│              Monitors Layer            │
+│   PlatformAdapter (реестр по YAML)     │
+│   run / send_reply / capabilities      │
+├──────────┴──────────┴──────────┴───────┤
+│        Drivers (src/monitors/)         │
 ├──────────┬──────────┬──────────┬───────┤
-│ Telethon │ VK API   │ (other)  │       │
-│ (TG)     │          │          │       │
+│ Telethon │ Bot API  │ VK API   │ …     │
 └──────────┴──────────┴──────────┴───────┘
 ```
+
+Новая платформа: модуль в `src/platforms/adapters/` + запись в `src/platforms/registry.py` (ключ `platform` + `account_type` из `persona.yaml`). Граф и оркестратор не содержат `elif platform == …` для отправки сообщений.
 
 ### Пайплайн обработки сообщения
 
@@ -57,11 +61,13 @@
 └────────┬────────┘
          ↓
 ┌─────────────────┐
-│  Anti-Spam      │  (typing simulation, delays)
+│  Anti-Spam      │  (typing simulation, delays; эмодзи — если adapter.capabilities)
 └────────┬────────┘
          ↓
-    Отправка → Память (SQLite)
+    Отправка через PlatformAdapter → Память (Supabase + эмбеддинги; см. DATABASE_URL)
 ```
+
+Пайплайн в проде реализован как **LangGraph** с чекпоинтером в PostgreSQL (`DATABASE_URL`). Подробности — `ARCHITECTURE.md`.
 
 ## YAML-конфигурация
 
@@ -92,6 +98,8 @@ pip install -r requirements.txt
 export OPENROUTER_API_KEY="sk-or-..."
 export PERSONAS_DIR="./personas"
 export MEMORY_DIR="./data/memory"
+# Память LangGraph + Supabase (PostgreSQL, при необходимости pgvector)
+export DATABASE_URL="postgresql://..."
 
 # Запуск
 python -m src.main
@@ -106,10 +114,12 @@ sales-bot-engine/
 │   ├── fitness/         # Фитнес-эксперт
 │   └── smm_blogger/     # SMM-специалист
 ├── src/
-│   ├── core/            # Router, Orchestrator
-│   ├── monitors/        # Monitors (TG, VK)
+│   ├── core/            # Router, Orchestrator, PersonaManager
+│   ├── platforms/       # PlatformAdapter, registry, адаптеры TG/VK
+│   ├── graph/           # LangGraph ноды и сборка графа
+│   ├── monitors/        # Низкоуровневые драйверы (Telethon, Bot API, VK)
 │   ├── responders/      # Generator, Composer
-│   └── memory/          # User Memory (SQLite)
+│   └── memory/          # MemoryFacade, Supabase, эмбеддинги
 ├── data/
 │   ├── memory/          # SQLite DBs per persona
 │   └── logs/            # Logs
@@ -122,7 +132,8 @@ sales-bot-engine/
 
 ## Runtime Inventory
 
-- **Production:** `src/core/orchestrator.py` — multi-persona, full pipeline
+- **Production:** `src/core/orchestrator.py` — multi-persona, `PersonaRuntime.adapter` + LangGraph
+- **Платформы:** `src/platforms/` — `create_adapter()`, драйверы остаются в `src/monitors/`
 
 ## Автор
 

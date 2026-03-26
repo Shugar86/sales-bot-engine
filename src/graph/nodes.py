@@ -25,6 +25,7 @@ from langchain_core.runnables import RunnableConfig
 from ..core.router import Decision
 from ..models.message import IncomingMessage
 from ..monitors.anti_spam import TypingSpeedCalculator
+from ..platforms import SendOptions
 from ..responders.preprocess import PreprocessResult
 from ..responders.response_composer import looks_like_greeting
 from ..responders.text_humanizer import humanize_text
@@ -357,8 +358,18 @@ async def antispam_node(state: PersonaState, config: RunnableConfig) -> dict:
         logger.debug(f"[{runtime.config.name}] Leave on read")
         return {"can_send": False, "send_delay": 0.0, **updates}
 
-    # Emoji reaction check (group chats only)
-    if not msg.is_dm and runtime.antispam.should_use_emoji_reaction():
+    # Emoji reaction check (group chats only; skip if adapter cannot react)
+    caps = (
+        runtime.adapter.capabilities()
+        if runtime.adapter
+        else None
+    )
+    if (
+        not msg.is_dm
+        and caps
+        and caps.supports_reactions
+        and runtime.antispam.should_use_emoji_reaction()
+    ):
         emoji = runtime.antispam.get_emoji_reaction(msg.text)
         if emoji:
             logger.info(f"[{runtime.config.name}] Emoji reaction: {emoji}")
@@ -492,6 +503,7 @@ async def validate_node(state: PersonaState, config: RunnableConfig) -> dict:
     cleaned = validation.cleaned_text
     if not cleaned:
         logger.info(f"[{runtime.config.name}] Validator cleared response")
+        cleaned = None
 
     return {"validated_text": cleaned, "node_history": ["validate"]}
 
@@ -533,31 +545,34 @@ async def send_node(state: PersonaState, config: RunnableConfig) -> dict:
         await asyncio.sleep(delay)
 
     # Typing simulation
+    typing_already_simulated = False
     if runtime.config.anti_spam.typing_simulation:
         calc = TypingSpeedCalculator()
         typing_time = calc.estimate_typing_time(send_text)
 
         try:
-            if hasattr(runtime.monitor, "send_typing"):
-                await runtime.monitor.send_typing(msg.chat_id)
+            if runtime.adapter:
+                await runtime.adapter.send_typing(msg)
         except Exception:
             pass
 
         await asyncio.sleep(min(typing_time, 15.0))
+        if runtime.config.account_type == "userbot":
+            typing_already_simulated = True
 
     # Send
     try:
-        kwargs: dict = {}
-        if runtime.config.platform == "vk":
-            kwargs["peer_id"] = msg.chat_id
-        else:
-            kwargs["chat_id"] = msg.chat_id
-            if not msg.is_dm:
-                kwargs["reply_to"] = msg.message_id
-            if runtime.config.account_type == "userbot":
-                kwargs["typing_delay"] = False  # Already simulated above
+        if not runtime.adapter:
+            logger.error(f"[{runtime.config.name}] No platform adapter")
+            return {"sent": False, "node_history": ["send"]}
 
-        success = await runtime.monitor.send_message(text=send_text, **kwargs)
+        reply_to = None if msg.is_dm else msg.message_id
+        options = SendOptions(
+            reply_to_message_id=reply_to,
+            typing_already_simulated=typing_already_simulated,
+            thread_id=msg.thread_id,
+        )
+        success = await runtime.adapter.send_reply(msg, send_text, options)
 
         if success:
             # Record for anti-repeat
@@ -664,15 +679,16 @@ async def send_shortcut_node(state: PersonaState, config: RunnableConfig) -> dic
         return {"sent": False, "node_history": ["send_shortcut"]}
 
     try:
-        kwargs: dict = {}
-        if runtime.config.platform == "vk":
-            kwargs["peer_id"] = msg.chat_id
-        else:
-            kwargs["chat_id"] = msg.chat_id
-            if not msg.is_dm:
-                kwargs["reply_to"] = msg.message_id
+        if not runtime.adapter:
+            return {"sent": False, "node_history": ["send_shortcut"]}
 
-        success = await runtime.monitor.send_message(text=shortcut_text, **kwargs)
+        reply_to = None if msg.is_dm else msg.message_id
+        options = SendOptions(
+            reply_to_message_id=reply_to,
+            typing_already_simulated=False,
+            thread_id=msg.thread_id,
+        )
+        success = await runtime.adapter.send_reply(msg, shortcut_text, options)
 
         if success:
             await runtime.memory.record_bot_response(msg.chat_id, shortcut_text)
@@ -705,11 +721,10 @@ async def emoji_node(state: PersonaState, config: RunnableConfig) -> dict:
         return {"sent": False, "node_history": ["emoji"]}
 
     try:
-        success = await runtime.monitor.send_reaction(
-            chat_id=msg.chat_id,
-            message_id=msg.message_id,
-            emoji=emoji,
-        )
+        if not runtime.adapter or not runtime.adapter.capabilities().supports_reactions:
+            return {"sent": False, "node_history": ["emoji"]}
+
+        success = await runtime.adapter.send_reaction(msg, emoji)
 
         if success:
             logger.info(f"[{runtime.config.name}] Sent emoji: {emoji}")

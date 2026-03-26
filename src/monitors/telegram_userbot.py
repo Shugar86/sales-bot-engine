@@ -243,7 +243,20 @@ class TelegramUserbot:
         except Exception as e:
             logger.error(f"send_message failed after retries: {e}")
             return False
-    
+
+    async def send_typing(self, chat_id: str) -> None:
+        """Trigger typing indicator briefly (graph applies duration separately)."""
+        if not TELETHON_AVAILABLE:
+            return
+        try:
+            entity = await self.client.get_entity(
+                int(chat_id) if chat_id.lstrip("-").isdigit() else chat_id
+            )
+            async with self.client.action(entity, "typing"):
+                await asyncio.sleep(0.05)
+        except Exception as e:
+            logger.debug(f"send_typing: {e}")
+
     async def send_reaction(
         self,
         chat_id: str,

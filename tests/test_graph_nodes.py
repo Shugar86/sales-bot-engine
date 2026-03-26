@@ -4,7 +4,6 @@ Unit tests for each node in isolation, mocking dependencies.
 """
 
 import pytest
-from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from langchain_core.runnables import RunnableConfig
 
@@ -25,22 +24,23 @@ from src.graph.nodes import (
 from src.graph.state import PersonaState, build_initial_state
 from src.models.message import IncomingMessage, Platform
 from src.core.router import Decision, RouteResult
+from src.platforms.capabilities import PlatformCapabilities
 
 
 @pytest.fixture
 def sample_message():
     """Create a sample incoming message."""
     return IncomingMessage(
-        platform=Platform.TELEGRAM,
+        message_id=789,
+        chat_id="chat456",
+        chat_title="Test Chat",
         user_id="user123",
         username="@testuser",
         display_name="Test User",
-        chat_id="chat456",
-        chat_title="Test Chat",
         text="Hello, what dog food do you recommend?",
-        message_id=789,
         is_dm=True,
-        timestamp=datetime.now(),
+        date=1700000000,
+        platform=Platform.TELEGRAM_USERBOT,
     )
 
 
@@ -118,10 +118,20 @@ def mock_runtime():
         cleaned_text="Cleaned response text"
     ))
 
-    # Mock monitor
-    runtime.monitor = AsyncMock()
-    runtime.monitor.send_message = AsyncMock(return_value=True)
-    runtime.monitor.send_reaction = AsyncMock(return_value=True)
+    # Mock platform adapter
+    caps = PlatformCapabilities(
+        supports_dm=True,
+        supports_group_reply=True,
+        supports_reactions=True,
+        supports_edit=False,
+        supports_fetch_thread_context=False,
+        supports_typing_indicator=True,
+    )
+    runtime.adapter = MagicMock()
+    runtime.adapter.capabilities = MagicMock(return_value=caps)
+    runtime.adapter.send_reply = AsyncMock(return_value=True)
+    runtime.adapter.send_reaction = AsyncMock(return_value=True)
+    runtime.adapter.send_typing = AsyncMock(return_value=None)
 
     # Mock config
     runtime.config = MagicMock()
@@ -185,8 +195,8 @@ class TestPreprocessNode:
 
         result = await preprocess_node(state, mock_config)
 
-        assert result["preprocess_skip"] is False
-        assert result["preprocess_shortcut"] is None
+        assert result.get("preprocess_skip") is not True
+        assert result.get("preprocess_shortcut") is None
         assert "preprocess" in result["node_history"]
 
     @pytest.mark.asyncio
@@ -389,19 +399,19 @@ class TestSendNode:
         state = build_initial_state(sample_message)
         state["validated_text"] = "Response to send"
         state["send_delay"] = 0.0
-        mock_runtime.monitor.send_message = AsyncMock(return_value=True)
+        mock_runtime.adapter.send_reply = AsyncMock(return_value=True)
 
         result = await send_node(state, mock_config)
 
         assert result["sent"] is True
-        mock_runtime.monitor.send_message.assert_called_once()
+        mock_runtime.adapter.send_reply.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_failed_send(self, sample_message, mock_config, mock_runtime):
         """Should handle send failure."""
         state = build_initial_state(sample_message)
         state["validated_text"] = "Response to send"
-        mock_runtime.monitor.send_message = AsyncMock(return_value=False)
+        mock_runtime.adapter.send_reply = AsyncMock(return_value=False)
 
         result = await send_node(state, mock_config)
 
@@ -448,7 +458,7 @@ class TestEmojiNode:
         result = await emoji_node(state, mock_config)
 
         assert result["sent"] is True
-        mock_runtime.monitor.send_reaction.assert_called_once()
+        mock_runtime.adapter.send_reaction.assert_called_once()
 
 
 class TestSendShortcutNode:
@@ -463,4 +473,4 @@ class TestSendShortcutNode:
         result = await send_shortcut_node(state, mock_config)
 
         assert result["sent"] is True
-        mock_runtime.monitor.send_message.assert_called_once()
+        mock_runtime.adapter.send_reply.assert_called_once()

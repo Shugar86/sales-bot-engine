@@ -18,6 +18,7 @@ from .vibe_schema import (
     ContextPolicy, AntiSpamConfig, MemoryConfig, ResponseExample,
 )
 from ..utils.logger import get_logger
+from ..models.message import IncomingMessage
 
 logger = get_logger("persona-manager")
 
@@ -312,54 +313,21 @@ class PersonaManager:
         return None
 
     async def run_persona(self, persona: PersonaConfig, handler: Callable):
-        """Run a single persona's monitor."""
+        """Run a single persona via the platform registry (same as orchestrator)."""
+        from ..platforms import UnknownPlatformError, create_adapter
+
         logger.info(f"Starting persona: {persona.name} on {persona.platform}")
         try:
-            if persona.platform == "telegram":
-                await self._run_telegram_persona(persona, handler)
-            elif persona.platform == "vk":
-                await self._run_vk_persona(persona, handler)
-            else:
-                logger.error(f"Unknown platform: {persona.platform}")
+            adapter = await create_adapter(persona)
+
+            async def callback(msg: IncomingMessage) -> None:
+                await handler(msg, persona)
+
+            await adapter.run(callback=callback, allowed_chats=persona.groups_to_monitor)
+        except UnknownPlatformError as e:
+            logger.error(str(e))
         except Exception as e:
             logger.error(f"Persona {persona.name} crashed: {e}")
-
-    async def _run_telegram_persona(self, persona: PersonaConfig, handler: Callable):
-        """Run Telegram persona."""
-        from ..monitors.telegram_userbot import TelegramUserbot
-
-        if persona.account_type == "userbot":
-            bot = TelegramUserbot(
-                session_name=persona.session_name or persona.name.lower(),
-                api_id=persona.api_id or None,
-                api_hash=persona.api_hash or None,
-                phone=persona.phone or None,
-            )
-
-            async def callback(msg):
-                await handler(msg, persona)
-
-            await bot.run(callback=callback, allowed_chats=persona.groups_to_monitor)
-
-        elif persona.account_type == "bot":
-            from ..monitors.telegram_monitor import TelegramMonitor
-            bot = TelegramMonitor(bot_token=persona.bot_token)
-
-            async def callback(msg):
-                await handler(msg, persona)
-
-            await bot.poll_loop(callback=callback, allowed_chats=persona.groups_to_monitor)
-
-    async def _run_vk_persona(self, persona: PersonaConfig, handler: Callable):
-        """Run VK persona."""
-        from ..monitors.vk_monitor import VKMonitorAsync
-        monitor = VKMonitorAsync(access_token=persona.vk_token)
-        await monitor.start()
-
-        async def callback(msg):
-            await handler(msg, persona)
-
-        await monitor.run(callback=callback, allowed_chats=persona.groups_to_monitor)
 
     async def run_all(self, handler: Callable):
         """Run all personas in parallel."""

@@ -26,15 +26,11 @@ from ..core.router import MessageRouter, Decision, RouteResult
 from ..core.output_validators import OutputValidator, ValidationResult
 from ..core.prompt_compiler import PromptCompiler
 from ..core.vibe_schema import VibePersona, VibeBehavior, ResponseExample, GreetingPolicy as SchemaGreetingPolicy
-from ..graph.builder import build_config, compile_persona_graph
 from ..graph.state import build_initial_state
 from ..memory.memory_facade import MemoryFacade
 from ..responders.generator import ResponseGenerator, GeneratedResponse
-from ..monitors.telegram_userbot import TelegramUserbot, UserbotMessage
-from ..monitors.telegram_monitor import TelegramMonitor, TelegramMessage
-from ..monitors.vk_monitor import VKMonitorAsync, VKMessage
 from ..monitors.anti_spam import RateLimiter, TypingSpeedCalculator
-from ..monitors.base import PlatformMonitor
+from ..platforms import PlatformAdapter, SendOptions, UnknownPlatformError, create_adapter
 from ..responders.text_humanizer import humanize_text
 from ..responders.chat_vibe import detect_chat_vibe
 from ..responders.response_composer import (
@@ -80,7 +76,7 @@ class PersonaRuntime:
     preprocessor: PreprocessNode = None  # Deterministic shortcuts
     anaphora: AnaphoraResolver = None  # Context anaphora resolution
     output_validator: OutputValidator = None  # Post-generation output validation
-    monitor: Optional[PlatformMonitor] = None  # TelegramUserbot | TelegramMonitor | VKMonitorAsync
+    adapter: Optional[PlatformAdapter] = None  # Telegram* / VK / future platforms
     graph: Optional[Any] = None  # NEW: Compiled LangGraph
     state: BotState = BotState.IDLE
     stats: dict = field(default_factory=lambda: {
@@ -261,8 +257,10 @@ class SalesBotOrchestrator:
         )
         runtime.stats["started_at"] = time.time()
 
-        # Compile LangGraph for this persona
+        # Compile LangGraph for this persona (lazy import — pulls Postgres checkpoint driver)
         try:
+            from ..graph.builder import compile_persona_graph
+
             runtime.graph = await compile_persona_graph(runtime)
             logger.info(f"Compiled LangGraph for {config.name}")
         except Exception as e:
@@ -360,6 +358,8 @@ class SalesBotOrchestrator:
         # Build initial state
         initial_state = build_initial_state(msg)
 
+        from ..graph.builder import build_config
+
         # Build config with runtime dependencies
         config = build_config(runtime, thread_id)
 
@@ -441,13 +441,16 @@ class SalesBotOrchestrator:
                     chat_vibe=None,
                 )
 
-            if response and response.text:
-                # Send
-                kwargs = {"chat_id": msg.chat_id}
-                if not msg.is_dm:
-                    kwargs["reply_to"] = msg.message_id
-
-                success = await runtime.monitor.send_message(text=response.text, **kwargs)
+            if response and response.text and runtime.adapter:
+                reply_to = None if msg.is_dm else msg.message_id
+                success = await runtime.adapter.send_reply(
+                    msg,
+                    response.text,
+                    SendOptions(
+                        reply_to_message_id=reply_to,
+                        typing_already_simulated=True,
+                    ),
+                )
 
                 if success:
                     runtime.stats["responses_sent"] += 1
@@ -464,146 +467,22 @@ class SalesBotOrchestrator:
         except Exception as e:
             logger.error(f"[{runtime.config.name}] Legacy handler error: {e}")
 
-    async def _send_response(
-        self,
-        runtime: PersonaRuntime,
-        msg: IncomingMessage,
-        text: str,
-    ) -> bool:
-        """Send response using the appropriate platform monitor."""
-        try:
-            config = runtime.config
-            monitor = runtime.monitor
-            if not monitor:
-                logger.error(f"[{config.name}] No monitor attached")
-                return False
-
-            kwargs: dict = {}
-            if config.platform == "vk":
-                kwargs["peer_id"] = msg.chat_id
-            else:
-                kwargs["chat_id"] = msg.chat_id
-                if not msg.is_dm:
-                    kwargs["reply_to"] = msg.message_id
-                if config.account_type == "userbot":
-                    kwargs["typing_delay"] = config.anti_spam.typing_simulation
-
-            return await monitor.send_message(text=text, **kwargs)
-
-        except Exception as e:
-            logger.error(f"[{runtime.config.name}] Send error: {e}")
-            return False
-
-    async def _send_emoji_reaction(
-        self,
-        runtime: PersonaRuntime,
-        msg: IncomingMessage,
-        emoji: str,
-    ) -> bool:
-        """Send emoji reaction instead of text response."""
-        try:
-            monitor = runtime.monitor
-            config = runtime.config
-
-            if config.platform == "telegram" and isinstance(monitor, TelegramUserbot):
-                return await monitor.send_reaction(
-                    chat_id=msg.chat_id,
-                    message_id=msg.message_id,
-                    emoji=emoji,
-                )
-
-            return False
-
-        except Exception as e:
-            logger.error(f"[{runtime.config.name}] Emoji reaction error: {e}")
-            return False
-
-    async def _run_telegram_userbot(
-        self,
-        runtime: PersonaRuntime,
-    ):
-        """Run a Telegram userbot persona."""
-        config = runtime.config
-
-        try:
-            bot = TelegramUserbot(
-                session_name=config.session_name or config.name.lower(),
-                api_id=config.api_id or None,
-                api_hash=config.api_hash or None,
-                phone=config.phone or None,
-            )
-            runtime.monitor = bot
-
-            async def callback(userbot_msg: UserbotMessage):
-                msg = IncomingMessage.from_userbot_message(userbot_msg, persona_name=config.name)
-                await self._handle_message(msg, runtime)
-
-            await bot.run(callback=callback, allowed_chats=config.groups_to_monitor)
-
-        except Exception as e:
-            logger.error(f"[{config.name}] Telegram userbot crashed: {e}")
-            runtime.stats["errors"] += 1
-            raise  # Propagate for restart logic
-
-    async def _run_telegram_bot(
-        self,
-        runtime: PersonaRuntime,
-    ):
-        """Run a Telegram Bot API persona."""
-        config = runtime.config
-
-        try:
-            bot = TelegramMonitor(bot_token=config.bot_token)
-            runtime.monitor = bot
-
-            async def callback(tg_msg: TelegramMessage):
-                msg = IncomingMessage.from_telegram_message(tg_msg, persona_name=config.name)
-                await self._handle_message(msg, runtime)
-
-            await bot.poll_loop(callback=callback, allowed_chats=config.groups_to_monitor)
-
-        except Exception as e:
-            logger.error(f"[{config.name}] Telegram bot crashed: {e}")
-            runtime.stats["errors"] += 1
-            raise  # Propagate for restart logic
-
-    async def _run_vk_persona(
-        self,
-        runtime: PersonaRuntime,
-    ):
-        """Run a VK persona."""
-        config = runtime.config
-
-        try:
-            monitor = VKMonitorAsync(access_token=config.vk_token)
-            await monitor.start()
-            runtime.monitor = monitor
-
-            async def callback(vk_msg: VKMessage):
-                msg = IncomingMessage.from_vk_message(vk_msg, persona_name=config.name)
-                await self._handle_message(msg, runtime)
-
-            await monitor.run(callback=callback, allowed_chats=config.groups_to_monitor)
-
-        except Exception as e:
-            logger.error(f"[{config.name}] VK persona crashed: {e}")
-            runtime.stats["errors"] += 1
-            raise  # Propagate for restart logic
-
     async def _run_persona(self, runtime: PersonaRuntime):
-        """Run a single persona based on its platform config."""
+        """Run a single persona: registry-built adapter + inbound loop."""
         config = runtime.config
         logger.info(f"Starting persona: {config.name} on {config.platform}/{config.account_type}")
 
         try:
-            if config.platform == "telegram" and config.account_type == "userbot":
-                await self._run_telegram_userbot(runtime)
-            elif config.platform == "telegram" and config.account_type == "bot":
-                await self._run_telegram_bot(runtime)
-            elif config.platform == "vk":
-                await self._run_vk_persona(runtime)
-            else:
-                logger.error(f"[{config.name}] Unknown platform: {config.platform}/{config.account_type}")
+            adapter = await create_adapter(config)
+            runtime.adapter = adapter
+
+            async def callback(msg: IncomingMessage) -> None:
+                await self._handle_message(msg, runtime)
+
+            await adapter.run(callback=callback, allowed_chats=config.groups_to_monitor)
+        except UnknownPlatformError as e:
+            logger.error(f"[{config.name}] {e}")
+            runtime.stats["errors"] += 1
         except Exception as e:
             logger.error(f"[{config.name}] Fatal error: {e}")
             runtime.stats["errors"] += 1
@@ -678,12 +557,11 @@ class SalesBotOrchestrator:
 
         # Cleanup resources for each runtime
         for name, runtime in self.runtimes.items():
-            # Stop monitor
-            if runtime.monitor and hasattr(runtime.monitor, 'stop'):
+            if runtime.adapter:
                 try:
-                    await runtime.monitor.stop()
+                    await runtime.adapter.stop()
                 except Exception as e:
-                    logger.debug(f"[{name}] Monitor stop error: {e}")
+                    logger.debug(f"[{name}] Adapter stop error: {e}")
 
             # Close LLM client
             try:
@@ -712,6 +590,7 @@ class SalesBotOrchestrator:
                 name: {
                     "state": runtime.state.value,
                     "platform": runtime.config.platform,
+                    "platform_key": runtime.adapter.platform_key() if runtime.adapter else None,
                     "account_type": runtime.config.account_type,
                     "stats": runtime.stats,
                     "antispam": runtime.antispam.get_stats(),

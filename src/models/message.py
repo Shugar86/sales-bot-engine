@@ -36,6 +36,8 @@ class IncomingMessage:
     reply_to_message_id: Optional[int] = None
     is_reply_to_me: bool = False
     persona_name: str = ""  # which persona this message belongs to
+    thread_id: Optional[str] = None  # forum thread / post id (Reddit, etc.)
+    conversation_id: Optional[str] = None  # when distinct from chat_id
     raw: object = field(default=None, repr=False)  # original platform message
     
     @classmethod

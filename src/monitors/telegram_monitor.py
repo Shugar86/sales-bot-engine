@@ -234,7 +234,21 @@ class TelegramMonitor:
         except Exception as e:
             logger.error(f"sendMessage failed after retries: {e}")
             return False
-    
+
+    async def send_typing(self, chat_id: str) -> None:
+        """Send typing chat action (best-effort)."""
+        try:
+            await self.client.post(
+                f"{self.base_url}/sendChatAction",
+                json={"chat_id": chat_id, "action": "typing"},
+            )
+        except Exception as e:
+            logger.debug(f"sendChatAction typing failed: {e}")
+
+    async def stop(self) -> None:
+        """Signal poll loop to exit on next iteration."""
+        self._running = False
+
     async def poll_loop(
         self,
         callback: Callable,

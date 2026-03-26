@@ -6,7 +6,6 @@ Uses mocking for checkpointer or requires real Supabase test project.
 
 import os
 import pytest
-from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,16 +17,16 @@ from src.models.message import IncomingMessage, Platform
 def sample_message():
     """Create a sample incoming message."""
     return IncomingMessage(
-        platform=Platform.TELEGRAM,
+        message_id=789,
+        chat_id="chat456",
+        chat_title="Test Chat",
         user_id="user123",
         username="@testuser",
         display_name="Test User",
-        chat_id="chat456",
-        chat_title="Test Chat",
         text="Hello, what dog food do you recommend?",
-        message_id=789,
         is_dm=True,
-        timestamp=datetime.now(),
+        date=1700000000,
+        platform=Platform.TELEGRAM_USERBOT,
     )
 
 
