@@ -47,7 +47,6 @@ def valid_persona_yaml(tmp_path):
                     {
                         "keywords": ["тест", "проверка"],
                         "topics": ["testing"],
-                        "probability": 0.5,
                     }
                 ],
                 "ignore_when": [
@@ -60,7 +59,6 @@ def valid_persona_yaml(tmp_path):
             "conversation_flow": {
                 "group_mode": {
                     "max_messages_per_hour": 5,
-                    "probability_to_respond": 0.4,
                     "style": "дружелюбный",
                 },
                 "dm_mode": {
@@ -146,8 +144,7 @@ class TestLoadPersona:
         
         assert len(persona.respond_triggers) == 1
         assert "тест" in persona.respond_triggers[0].keywords
-        assert persona.respond_triggers[0].probability == 0.5
-        
+
         assert len(persona.ignore_triggers) == 1
         assert "спам" in persona.ignore_triggers[0].contains
     
@@ -155,7 +152,6 @@ class TestLoadPersona:
         persona = load_persona(valid_persona_yaml)
         
         assert persona.group_mode.max_messages_per_hour == 5
-        assert persona.group_mode.probability_to_respond == 0.4
         assert persona.dm_mode.greeting == "Привет!"
         assert len(persona.dm_mode.funnel) == 2
     
@@ -206,6 +202,12 @@ class TestLoadPersona:
     def test_load_nonexistent_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             load_persona(str(tmp_path / "nonexistent.yaml"))
+
+    def test_env_overrides_phone(self, valid_persona_yaml, monkeypatch):
+        """session_name *test* → TEST_PHONE overlays YAML phone."""
+        monkeypatch.setenv("TEST_PHONE", "+79990001122")
+        persona = load_persona(valid_persona_yaml)
+        assert persona.phone == "+79990001122"
 
 
 class TestDiscoverPersonas:

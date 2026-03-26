@@ -366,6 +366,9 @@ class SalesBotOrchestrator:
         try:
             # Run the graph
             if runtime.graph:
+                logger.debug(
+                    f"[{runtime.config.name}] execution_path=graph thread_id={thread_id}"
+                )
                 final_state = await runtime.graph.ainvoke(initial_state, config=config)
 
                 # Update stats based on results
@@ -383,8 +386,10 @@ class SalesBotOrchestrator:
                 node_history = final_state.get("node_history", [])
                 logger.debug(f"[{runtime.config.name}] Path: {' -> '.join(node_history)}")
             else:
-                # Fallback: use legacy handler if graph not compiled
-                logger.warning(f"[{runtime.config.name}] No graph available, using legacy handler")
+                logger.warning(
+                    f"[{runtime.config.name}] execution_path=legacy "
+                    "reason=no_compiled_graph (DATABASE_URL / graph build failed)"
+                )
                 await self._handle_message_legacy(msg, runtime)
 
         except Exception as e:
@@ -419,10 +424,11 @@ class SalesBotOrchestrator:
             is_dm=msg.is_dm,
         )
 
-        if route_result.decision == Decision.IGNORE:
+        if route_result.decision in (Decision.IGNORE, Decision.DISENGAGE):
             runtime.stats["ignored"] += 1
             return
 
+        # RESPOND, ENGAGE, WAIT, SALES_DM → generate (aligned with LangGraph route mapping)
         # Generate response
         try:
             if msg.is_dm:

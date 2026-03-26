@@ -7,8 +7,10 @@ Tests the preprocess → route → generate → compose pipeline:
 - Anaphora integration
 """
 
+import importlib
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, patch
 from src.core.orchestrator import (
     SalesBotOrchestrator,
     PersonaRuntime,
@@ -31,6 +33,33 @@ from src.core.vibe_schema import (
 from src.responders.response_composer import ResponseComposer, GreetingPolicy
 from src.responders.preprocess import PreprocessNode
 from src.responders.anaphora_resolver import AnaphoraResolver
+
+
+@pytest.fixture
+def mock_memory_and_graph():
+    """Avoid real Supabase and Postgres checkpointer when building runtime."""
+    mem = AsyncMock()
+    mem.close = AsyncMock()
+    graph_mock = MagicMock()
+    graph_mock.ainvoke = AsyncMock(
+        return_value={
+            "sent": False,
+            "route_decision": "ignore",
+            "node_history": [],
+        }
+    )
+    graph_builder = importlib.import_module("src.graph.builder")
+    with patch(
+        "src.core.orchestrator.MemoryFacade.create",
+        new_callable=AsyncMock,
+        return_value=mem,
+    ), patch.object(
+        graph_builder,
+        "compile_persona_graph",
+        new_callable=AsyncMock,
+        return_value=graph_mock,
+    ):
+        yield
 
 
 # ══════════════════════════════════════════════════════════════
@@ -76,47 +105,51 @@ class TestPersonaRuntimeNewComponents:
 # ══════════════════════════════════════════════════════════════
 
 class TestOrchestratorBuildRuntime:
-    def test_build_runtime_creates_composer(self):
+    @pytest.mark.asyncio
+    async def test_build_runtime_creates_composer(self, mock_memory_and_graph):
         """_build_runtime should create ResponseComposer."""
         config = load_persona("personas/kormoved/persona.yaml")
         orchestrator = SalesBotOrchestrator(
             openrouter_api_key="test-key",
         )
-        runtime = orchestrator._build_runtime(config)
+        runtime = await orchestrator._build_runtime(config)
 
         assert runtime.composer is not None
         assert isinstance(runtime.composer, ResponseComposer)
         assert runtime.composer.persona_name == "Андрей"
 
-    def test_build_runtime_creates_preprocessor(self):
+    @pytest.mark.asyncio
+    async def test_build_runtime_creates_preprocessor(self, mock_memory_and_graph):
         """_build_runtime should create PreprocessNode."""
         config = load_persona("personas/kormoved/persona.yaml")
         orchestrator = SalesBotOrchestrator(
             openrouter_api_key="test-key",
         )
-        runtime = orchestrator._build_runtime(config)
+        runtime = await orchestrator._build_runtime(config)
 
         assert runtime.preprocessor is not None
         assert isinstance(runtime.preprocessor, PreprocessNode)
 
-    def test_build_runtime_creates_anaphora(self):
+    @pytest.mark.asyncio
+    async def test_build_runtime_creates_anaphora(self, mock_memory_and_graph):
         """_build_runtime should create AnaphoraResolver."""
         config = load_persona("personas/kormoved/persona.yaml")
         orchestrator = SalesBotOrchestrator(
             openrouter_api_key="test-key",
         )
-        runtime = orchestrator._build_runtime(config)
+        runtime = await orchestrator._build_runtime(config)
 
         assert runtime.anaphora is not None
         assert isinstance(runtime.anaphora, AnaphoraResolver)
 
-    def test_build_runtime_greeting_policy_from_config(self):
+    @pytest.mark.asyncio
+    async def test_build_runtime_greeting_policy_from_config(self, mock_memory_and_graph):
         """Greeting policy should come from persona config."""
         config = load_persona("personas/kormoved/persona.yaml")
         orchestrator = SalesBotOrchestrator(
             openrouter_api_key="test-key",
         )
-        runtime = orchestrator._build_runtime(config)
+        runtime = await orchestrator._build_runtime(config)
 
         policy = runtime.composer.greeting_policy
         assert policy.enabled
@@ -129,7 +162,8 @@ class TestOrchestratorBuildRuntime:
 # ══════════════════════════════════════════════════════════════
 
 class TestOrchestratorIntegration:
-    def test_all_personas_build_successfully(self):
+    @pytest.mark.asyncio
+    async def test_all_personas_build_successfully(self, mock_memory_and_graph):
         """All 3 personas should build runtimes with new components."""
         orchestrator = SalesBotOrchestrator(
             openrouter_api_key="test-key",
@@ -137,7 +171,7 @@ class TestOrchestratorIntegration:
         configs = orchestrator.load_personas()
 
         for config in configs:
-            runtime = orchestrator._build_runtime(config)
+            runtime = await orchestrator._build_runtime(config)
             assert runtime.composer is not None, f"{config.name}: missing composer"
             assert runtime.preprocessor is not None, f"{config.name}: missing preprocessor"
             assert runtime.anaphora is not None, f"{config.name}: missing anaphora"

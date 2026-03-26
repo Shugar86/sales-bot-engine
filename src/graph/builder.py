@@ -138,13 +138,12 @@ def build_persona_graph(runtime: Any) -> StateGraph:
     # Parallel retrieval -> Route (single node does both concurrently via asyncio.gather)
     workflow.add_edge("parallel_retrieval", "route")
 
-    # Routing -> Anti-spam, Emoji, or END
+    # Routing -> Anti-spam or END (emoji only from antispam_node)
     workflow.add_conditional_edges(
         "route",
         after_route,
         {
             "antispam": "antispam",
-            "emoji": "emoji",
             "end": END,
         },
     )

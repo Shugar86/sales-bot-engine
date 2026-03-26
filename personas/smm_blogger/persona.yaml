@@ -101,16 +101,12 @@ persona:
     respond_when:
       - keywords: ["smm", "контент", "реклама", "таргет", "подписчики", "овлечение", "продвижение"]
         topics: ["social media marketing"]
-        probability: 0.7
       - keywords: ["instagram", "инста", "telegram-канал", "tg", "вконтакте", "vk", "tiktok"]
         topics: ["platform discussion"]
-        probability: 0.5
       - keywords: ["контент-план", "стратегия", "аудит", "аналитика", "метрики"]
         topics: ["content planning"]
-        probability: 0.8
       - keywords: ["как продвигать", "как набрать", "как расти", "нет клиентов"]
         topics: ["business growth"]
-        probability: 0.9
     ignore_when:
       - contains: ["политика", "спорт", "погода"]
       - from_bot: true
@@ -118,10 +114,10 @@ persona:
   conversation_flow:
     group_mode:
       max_messages_per_hour: 5
-      probability_to_respond: 0.3
       style: "подруга-эксперт, живая, с примерами"
     dm_mode:
       greeting: "Привет! Чем могу помочь со SMM?"
+      # funnel: подсказки для промпта (не исполняется как автомат в графе)
       funnel:
         - step: "узнать проблему"
           trigger: "Какой у вас бизнес? Что уже пробовали?"

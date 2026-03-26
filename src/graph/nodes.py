@@ -18,7 +18,7 @@ Node order:
 
 import asyncio
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from langchain_core.runnables import RunnableConfig
 
@@ -288,11 +288,49 @@ async def parallel_retrieval_node(state: PersonaState, config: RunnableConfig) -
 # NODE 5: Routing
 # ========================================
 
-async def route_node(state: PersonaState, config: RunnableConfig) -> dict:
-    """Decide whether to respond, ignore, or use emoji reaction.
+
+def map_router_decision_for_graph(decision: Any) -> Tuple[str, Optional[str]]:
+    """Map router :class:`~src.core.router.Decision` to graph branch labels.
+
+    Emoji reactions are not chosen here; ``antispam_node`` sets ``emoji_to_send``.
+
+    Args:
+        decision: Value from :class:`~src.core.router.RouteResult` (expected ``Decision``).
 
     Returns:
-        {"route_decision": "respond" | "ignore" | "emoji"}
+        ``(route_decision, error_message)``. ``error_message`` is set when the value is
+        invalid or a new ``Decision`` member was not wired into the graph (fail-safe).
+    """
+    if decision == Decision.IGNORE:
+        return "ignore", None
+    if decision == Decision.DISENGAGE:
+        return "ignore", None
+    if decision in (
+        Decision.RESPOND,
+        Decision.SALES_DM,
+        Decision.ENGAGE,
+        Decision.WAIT,
+    ):
+        return "respond", None
+    if isinstance(decision, Decision):
+        msg = (
+            f"Unhandled router Decision in graph mapping: {decision!r}. "
+            "Add an explicit branch in map_router_decision_for_graph."
+        )
+        logger.error(msg)
+        return "error", msg
+    msg = (
+        f"Invalid router decision type for graph: {type(decision).__name__} ({decision!r})."
+    )
+    logger.error(msg)
+    return "error", msg
+
+
+async def route_node(state: PersonaState, config: RunnableConfig) -> dict:
+    """Map router output to graph branches (respond / ignore / error).
+
+    Returns:
+        State updates including ``route_decision`` and cached ``chat_context``.
     """
     runtime = _get_runtime(config)
     msg: IncomingMessage = state["message"]
@@ -301,10 +339,12 @@ async def route_node(state: PersonaState, config: RunnableConfig) -> dict:
     recent_msgs = await runtime.memory.get_recent_messages(msg.chat_id, limit=10)
     chat_context = [m["text"] for m in recent_msgs]
 
-    # Route
+    top_lines = chat_context[:3]
+    chat_context_str = "\n".join(top_lines) if top_lines else ""
+
     route_result = await runtime.router.route(
         message_text=state["resolved_question"] or msg.text,
-        chat_context=chat_context[:3],  # Use top 3 for routing decision
+        chat_context=chat_context_str,
         is_dm=msg.is_dm,
     )
 
@@ -314,18 +354,15 @@ async def route_node(state: PersonaState, config: RunnableConfig) -> dict:
         f"(conf={route_result.confidence:.1f}, reason={route_result.reason})"
     )
 
-    # Map to simplified decisions, include chat_context for reuse in generate_node
-    result = {
-        "route_decision": "",
-        "chat_context": chat_context,  # Cache for generate_node to avoid duplicate query
+    route_decision, map_error = map_router_decision_for_graph(route_result.decision)
+
+    result: dict = {
+        "route_decision": route_decision,
+        "chat_context": chat_context,
         "node_history": ["route"],
     }
-    if route_result.decision == Decision.IGNORE:
-        result["route_decision"] = "ignore"
-    elif route_result.decision == Decision.RESPOND:
-        result["route_decision"] = "respond"
-    else:
-        result["route_decision"] = "emoji"
+    if map_error:
+        result["error_message"] = map_error
     return result
 
 
@@ -454,7 +491,15 @@ async def generate_node(state: PersonaState, config: RunnableConfig) -> dict:
             logger.debug(
                 f"[{runtime.config.name}] Generated: {response.text[:80]}..."
             )
-            return {"generated_text": response.text, "node_history": ["generate"]}
+            gen_updates: dict = {
+                "generated_text": response.text,
+                "node_history": ["generate"],
+            }
+            if msg.is_dm:
+                st = (getattr(response, "stage", None) or "").strip()
+                if st:
+                    gen_updates["funnel_stage"] = st
+            return gen_updates
         else:
             logger.info(f"[{runtime.config.name}] No response generated")
             return {"generated_text": None, "node_history": ["generate"]}
@@ -623,13 +668,16 @@ async def memory_node(state: PersonaState, config: RunnableConfig) -> dict:
             if state.get("sent") and state.get("validated_text"):
                 response_text = state["validated_text"]
 
+            funnel = state.get("funnel_stage", "unknown")
+            stage_arg = funnel if funnel and funnel != "unknown" else ""
+
             await runtime.memory.record_dm(
                 user_id=msg.user_id,
                 username=msg.username,
                 display_name=msg.display_name,
                 message=msg.text or "",
                 response=response_text,
-                stage=state.get("funnel_stage", "unknown"),
+                stage=stage_arg,
             )
         else:
             # Record group message

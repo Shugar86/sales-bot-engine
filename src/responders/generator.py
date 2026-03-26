@@ -62,7 +62,7 @@ GROUP_SYSTEM = """Ты — {persona_name}. {persona_backstory}
 - Как коллега на перекуре — коротко, по делу, без пафоса
 - Делишься личным опытом: "У меня было так же", "Вот недавно клиент..."
 - Можешь шутить, использовать эмодзи как живой человек (1-2, не спам)
-- Если тема рядом с твоей — помогаешь: "Я больше в собаках, но听说 что..."
+- Если тема рядом с твоей — помогаешь: "Я больше в собаках, но слышал что..."
 - Если тема совсем мимо — можешь вступить как обычный участник: "Ага, и правда"
 - Никогда не пишешь "к сожалению", "извините", "я не могу"
 - Никогда не признаёшься что ты бот/AI/программа — ты человек
@@ -214,7 +214,7 @@ class ResponseGenerator:
         flow = self.contract.get("conversation_flow", {})
         group = flow.get("group_chat", {})
         never = flow.get("never", [])
-        
+
         parts = []
         if group.get("steps"):
             for step in group["steps"]:
@@ -224,6 +224,18 @@ class ResponseGenerator:
             for n in never:
                 parts.append(f"- {n}")
         return "\n".join(parts)
+
+    def _get_dm_policy_hints(self) -> str:
+        """Greeting + funnel steps from YAML (policy hints for the DM prompt, not a runtime engine)."""
+        flow = self.contract.get("conversation_flow", {})
+        dm = flow.get("direct_message", {}) or {}
+        chunks: list[str] = []
+        strat = (dm.get("strategy") or "").strip()
+        if strat:
+            chunks.append(strat)
+        for step in dm.get("steps") or []:
+            chunks.append(f"- {step}")
+        return "\n".join(chunks)
     
     def _get_response_examples_text(self) -> str:
         """Format response examples for prompt injection."""
@@ -269,10 +281,11 @@ class ResponseGenerator:
     def generate_go_away_response(self, persona_name: str) -> GeneratedResponse:
         """Генерация ответа на 'отстань' — без LLM, мгновенно."""
         responses = [
-            "Ок, извини за назойливость. Если что — пиши сам.",
-            "Понял, прощаюсь. Если будут вопросы — обращайся.",
-            "Хорошо, больше не беспокою. Удачи!",
-            "Ладно, сорри что достал. Всё, молчу.",
+            "Ок, понял — отстану. Если передумаешь, напишешь сам.",
+            "Хорошо, без проблем — не буду мешать.",
+            "Понял тебя. На связи только если сам напишешь.",
+            "Ладно, извини что достал — всё, отключаюсь.",
+            "Хорошо, ясно — закрываю тему. Удачи.",
         ]
         return GeneratedResponse(
             text=random.choice(responses),
@@ -283,12 +296,12 @@ class ResponseGenerator:
     
     def generate_bot_denial_response(self, persona_name: str) -> GeneratedResponse:
         """Ответ на 'ты бот?' — без LLM, мгновенно."""
-        backstory = self._get_persona().get("backstory", "")
         responses = [
-            f"Ха, чего? Я {persona_name}, живой человек. Просто быстро печатаю.",
-            f"Нет конечно, я {persona_name}. Просто много общаюсь в чатах, привык отвечать быстро.",
-            f"Серьёзно? 😄 Я тут сижу, кофе пью, отвечаю. Никакой я не бот.",
-            f"Ахах, спасибо, я так быстро печатаю что похоже на бота. Но нет, это я.",
+            f"Нет, не бот) Я {persona_name}, обычный человек. Быстро печатаю с телефона.",
+            "Какой бот — нет, просто часто онлайн сижу.",
+            f"Не бот. {persona_name}, если что. Внятно печатаю, вот и кажется.",
+            "Нет, живой человек. Такое «ты бот» слышу иногда из‑за скорости ответа))",
+            "Нет) Если б я был ботом, давно бы тут завис на твоём вопросе.",
         ]
         return GeneratedResponse(
             text=random.choice(responses),
@@ -413,7 +426,11 @@ class ResponseGenerator:
             funnel_stage=funnel_stage,
             response_examples=self._get_response_examples_text(),
         )
-        
+
+        dm_hints = self._get_dm_policy_hints()
+        if dm_hints:
+            system += "\n\n=== Ориентиры для ЛС (из контракта) ===\n" + dm_hints
+
         # Inject behavior block compiled by PromptCompiler
         if self.behavior_block:
             system = self.behavior_block + "\n\n" + system

@@ -9,7 +9,8 @@ from typing import Optional
 
 
 class Platform(Enum):
-    """Supported platforms."""
+    """Inbound message origin. Add a member when a new adapter normalizes to IncomingMessage."""
+
     TELEGRAM_BOT = "telegram_bot"
     TELEGRAM_USERBOT = "telegram_userbot"
     VK = "vk"

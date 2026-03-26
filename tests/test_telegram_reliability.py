@@ -64,7 +64,7 @@ class TestTelegramMonitorReliability:
     async def test_rate_limit_handling(self):
         """Should handle 429 with Retry-After."""
         import httpx
-        from src.core.retry import TELEGRAM_SEND_POLICY
+        from src.core.retry import retry_with_backoff, TELEGRAM_SEND_POLICY
 
         retry_after_received = []
 

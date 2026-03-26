@@ -7,8 +7,10 @@ OutputValidators, ContextPolicy) from vibe_schema.py
 """
 
 import asyncio
+import os
+import re
 from pathlib import Path
-from typing import Callable, Optional, Any
+from typing import Any, Callable, Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -28,7 +30,6 @@ logger = get_logger("persona-manager")
 class TriggerConfig(BaseModel):
     keywords: list[str] = Field(default_factory=list)
     topics: list[str] = Field(default_factory=list)
-    probability: float = 0.3
     model_config = ConfigDict(extra="ignore")
 
 
@@ -41,7 +42,6 @@ class IgnoreConfig(BaseModel):
 
 class GroupModeConfig(BaseModel):
     max_messages_per_hour: int = 3
-    probability_to_respond: float = 0.3
     style: str = "экспертный, ненавязчивый"
     model_config = ConfigDict(extra="ignore")
 
@@ -53,6 +53,8 @@ class DMFunnelStep(BaseModel):
 
 
 class DMModeConfig(BaseModel):
+    """DM copy and optional funnel *hints* for prompts (not a state machine in runtime)."""
+
     greeting: str = ""
     funnel: list[DMFunnelStep] = Field(default_factory=list)
     model_config = ConfigDict(extra="ignore")
@@ -158,6 +160,52 @@ class PersonaConfig(BaseModel):
         return value.strip()
 
 
+# ─── Env overlays (secrets must not live in git-tracked YAML) ───────
+
+
+def _persona_env_prefix(config: PersonaConfig) -> str:
+    """Build env var prefix from ``session_name`` or ``name`` (e.g. ``kormoved`` → ``KORMOVED``)."""
+    raw = (config.session_name or config.name or "persona").strip()
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", raw).upper().strip("_")
+    return slug or "PERSONA"
+
+
+def apply_env_overrides_to_persona(config: PersonaConfig) -> None:
+    """Overlay phone/tokens/API credentials from environment.
+
+    Per-persona variables use ``{PREFIX}_*`` where PREFIX is derived from
+    ``session_name`` in uppercase (e.g. ``KORMOVED_PHONE``). Shared Telegram
+    app credentials can be set via ``TELEGRAM_API_ID`` / ``TELEGRAM_API_HASH``.
+    """
+    prefix = _persona_env_prefix(config)
+
+    def prefixed(suffix: str) -> str | None:
+        val = os.getenv(f"{prefix}_{suffix}")
+        if val is not None and str(val).strip() != "":
+            return str(val).strip()
+        return None
+
+    phone = prefixed("PHONE")
+    if phone:
+        config.phone = phone
+
+    bot_token = prefixed("BOT_TOKEN")
+    if bot_token:
+        config.bot_token = bot_token
+
+    vk_token = prefixed("VK_TOKEN")
+    if vk_token:
+        config.vk_token = vk_token
+
+    api_id_raw = prefixed("API_ID") or os.getenv("TELEGRAM_API_ID")
+    if api_id_raw and str(api_id_raw).strip().isdigit():
+        config.api_id = int(str(api_id_raw).strip())
+
+    api_hash = prefixed("API_HASH") or os.getenv("TELEGRAM_API_HASH")
+    if api_hash:
+        config.api_hash = api_hash
+
+
 # ─── Loader ─────────────────────────────────────────────────────────
 
 def load_persona(yaml_path: str) -> PersonaConfig:
@@ -202,7 +250,6 @@ def load_persona(yaml_path: str) -> PersonaConfig:
     gm = cf.get("group_mode", {})
     group_mode = GroupModeConfig(
         max_messages_per_hour=gm.get("max_messages_per_hour", 3),
-        probability_to_respond=gm.get("probability_to_respond", 0.3),
         style=gm.get("style", "экспертный, ненавязчивый"),
     )
     dm = cf.get("dm_mode", {})
@@ -261,6 +308,8 @@ def load_persona(yaml_path: str) -> PersonaConfig:
         generator_model=persona_data.get("generator_model", "openrouter/hunter-alpha"),
         yaml_path=yaml_path,
     )
+
+    apply_env_overrides_to_persona(config)
 
     logger.info(f"Loaded persona: {config.name} ({config.platform}/{config.account_type})")
     return config

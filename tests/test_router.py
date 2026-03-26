@@ -92,12 +92,19 @@ class TestRouterDecisions:
     
     @pytest.mark.asyncio
     async def test_dm_always_sales(self, router, mock_llm):
-        """ЛС → всегда SALES_DM без вызова LLM"""
+        """ЛС → SALES_DM без LLM (после пред-фильтров)"""
         result = await router.route("Привет", is_dm=True)
-        
+
         assert result.decision == Decision.SALES_DM
         assert result.confidence == 1.0
-        # LLM не должен вызываться для DM
+        mock_llm.call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dm_go_away_uses_prefilter(self, router, mock_llm):
+        """ЛС: «отстань» проходит через пред-фильтр → DISENGAGE, без LLM."""
+        result = await router.route("отстань", is_dm=True)
+
+        assert result.decision == Decision.DISENGAGE
         mock_llm.call.assert_not_called()
     
     @pytest.mark.asyncio

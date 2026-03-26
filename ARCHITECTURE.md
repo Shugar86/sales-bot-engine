@@ -163,7 +163,6 @@ persona:
     respond_when:
       - keywords: ["корм", "собака"]
         topics: ["кормление"]
-        probability: 0.8
 
   anti_spam:
     min_delay_between_messages: 30

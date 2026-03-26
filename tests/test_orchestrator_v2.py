@@ -36,7 +36,7 @@ def personas_dir(tmp_path):
             },
             "triggers": {
                 "respond_when": [
-                    {"keywords": ["тест", "продукт"], "probability": 1.0}
+                    {"keywords": ["тест", "продукт"]}
                 ],
                 "ignore_when": [
                     {"contains": ["спам"], "from_bot": True}
@@ -45,7 +45,6 @@ def personas_dir(tmp_path):
             "conversation_flow": {
                 "group_mode": {
                     "max_messages_per_hour": 10,
-                    "probability_to_respond": 0.5,
                     "style": "дружелюбный",
                 },
                 "dm_mode": {

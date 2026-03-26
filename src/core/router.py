@@ -234,12 +234,15 @@ class MessageRouter:
         Returns:
             RouteResult с решением
         """
-        # DM всегда обрабатываем
+        # DM: сначала пред-фильтры (отстань / спам / пусто), иначе — продажный DM
         if is_dm:
+            prefilter_dm = self._prefilter(message_text)
+            if prefilter_dm is not None:
+                return prefilter_dm
             return RouteResult(
                 decision=Decision.SALES_DM,
                 confidence=1.0,
-                reason="Direct message — always engage",
+                reason="Direct message — engage",
                 topic="dm",
             )
         

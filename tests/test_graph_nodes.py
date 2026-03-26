@@ -12,6 +12,7 @@ from src.graph.nodes import (
     preprocess_node,
     semantic_retrieval_node,
     anaphora_node,
+    map_router_decision_for_graph,
     route_node,
     antispam_node,
     generate_node,
@@ -305,6 +306,55 @@ class TestRouteNode:
         result = await route_node(state, mock_config)
 
         assert result["route_decision"] == "ignore"
+
+    @pytest.mark.asyncio
+    async def test_sales_dm_maps_to_respond(self, sample_message, mock_config, mock_runtime):
+        """DM router returns SALES_DM — must map to respond, not emoji."""
+        state = build_initial_state(sample_message)
+        state["resolved_question"] = sample_message.text
+        mock_runtime.router.route = AsyncMock(return_value=RouteResult(
+            decision=Decision.SALES_DM,
+            confidence=1.0,
+            reason="Direct message",
+        ))
+
+        result = await route_node(state, mock_config)
+
+        assert result["route_decision"] == "respond"
+        assert "error_message" not in result
+
+    @pytest.mark.asyncio
+    async def test_disengage_maps_to_ignore(self, sample_message, mock_config, mock_runtime):
+        """DISENGAGE should end reply path like ignore."""
+        state = build_initial_state(sample_message)
+        state["resolved_question"] = sample_message.text
+        mock_runtime.router.route = AsyncMock(return_value=RouteResult(
+            decision=Decision.DISENGAGE,
+            confidence=1.0,
+            reason="User asked to stop",
+        ))
+
+        result = await route_node(state, mock_config)
+
+        assert result["route_decision"] == "ignore"
+
+
+class TestMapRouterDecisionForGraph:
+    """Unit tests for router Decision → graph route_decision mapping."""
+
+    def test_all_known_decisions_mapped(self) -> None:
+        """Every Decision enum member must have explicit graph semantics."""
+        for d in Decision:
+            branch, err = map_router_decision_for_graph(d)
+            assert branch in ("ignore", "respond", "error")
+            assert err is None or branch == "error"
+
+    def test_invalid_type_returns_error(self) -> None:
+        """Non-Decision values are configuration errors, not silent emoji."""
+        branch, err = map_router_decision_for_graph(object())
+        assert branch == "error"
+        assert err is not None
+        assert "Invalid" in err or "invalid" in err.lower()
 
 
 class TestAntispamNode:

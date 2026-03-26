@@ -137,15 +137,25 @@ class TestStateTransitions:
         result = after_route(state)
         assert result == "antispam"
 
-    def test_route_emoji_transition(self, sample_message):
-        """Router emoji decision goes to emoji node."""
+    def test_route_error_transition(self, sample_message):
+        """Mapping error ends pipeline (no silent emoji branch from route)."""
+        from src.graph.edges import after_route
+
+        state = build_initial_state(sample_message)
+        state["route_decision"] = "error"
+
+        result = after_route(state)
+        assert result == "end"
+
+    def test_route_unknown_decision_defensive_end(self, sample_message):
+        """Unknown route_decision must not fall through to antispam."""
         from src.graph.edges import after_route
 
         state = build_initial_state(sample_message)
         state["route_decision"] = "emoji"
 
         result = after_route(state)
-        assert result == "emoji"
+        assert result == "end"
 
     def test_antispam_blocked_transition(self, sample_message):
         """Antispam block ends the pipeline."""

@@ -80,7 +80,14 @@
 - `behavior` — greeting policy, response examples
 - `product` — что продаёт
 - `triggers` — когда отвечать, когда молчать
-- `conversation_flow` — как вести диалог (группа vs ЛС)
+- `conversation_flow` — лимиты группы, стиль, тексты для ЛС; блок `dm_mode.funnel` — **подсказки для промпта**, а не отдельный state machine в графе (стадия воронки в DM обновляется из ответа генератора и пишется в память).
+
+## Секреты и аккаунты
+
+В `personas/*/persona.yaml` **не храните** телефон, токены бота, API hash. Задайте их в `.env` (шаблон — `.env.example`):
+
+- Общие: `OPENROUTER_API_KEY`, `DATABASE_URL`, при необходимости `TELEGRAM_API_ID` / `TELEGRAM_API_HASH`.
+- На персону: префикс = **верхний регистр `session_name`** из YAML (`kormoved` → `KORMOVED_PHONE`, `KORMOVED_API_HASH`, …). Значения из YAML подменяются при загрузке через `apply_env_overrides_to_persona`.
 
 ## Модели
 
@@ -132,8 +139,9 @@ sales-bot-engine/
 
 ## Runtime Inventory
 
-- **Production:** `src/core/orchestrator.py` — multi-persona, `PersonaRuntime.adapter` + LangGraph
-- **Платформы:** `src/platforms/` — `create_adapter()`, драйверы остаются в `src/monitors/`
+- **Production:** `src/core/orchestrator.py` — multi-persona, `PersonaRuntime.adapter` + **LangGraph** (основной путь при успешной компиляции графа и `DATABASE_URL`).
+- **Legacy:** линейный `_handle_message_legacy` только если граф не собран — в логах `execution_path=legacy`.
+- **Платформы:** `src/platforms/` — `create_adapter()`; как добавить платформу — `PLATFORM_EXTENSION.md`.
 
 ## Автор
 

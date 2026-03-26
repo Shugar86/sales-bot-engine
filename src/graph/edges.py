@@ -50,18 +50,19 @@ def after_preprocess(state: PersonaState) -> str:
 def after_route(state: PersonaState) -> str:
     """Route after message routing decision.
 
-    - "ignore" -> END (message not relevant)
+    Emoji reactions are only scheduled in antispam_node (emoji_to_send), not here.
+
+    - "ignore" | "error" -> END
     - "respond" -> antispam checks
-    - "emoji" -> emoji reaction
     """
     decision = state.get("route_decision", "")
 
-    if decision == "ignore":
+    if decision in ("ignore", "error"):
         return "end"
-    elif decision == "emoji":
-        return "emoji"
-    else:  # "respond"
+    if decision == "respond":
         return "antispam"
+    # Defensive: unknown route_decision should not silently continue the reply path
+    return "end"
 
 
 # ========================================

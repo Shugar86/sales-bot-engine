@@ -42,10 +42,10 @@ class PersonaState(TypedDict):
     """Question text after anaphora resolution."""
 
     route_decision: str
-    """Router decision: 'respond' | 'ignore' | 'emoji'."""
+    """Graph route branch: 'respond' | 'ignore' | 'error' (from router Decision mapping)."""
 
     emoji_to_send: Optional[str]
-    """Emoji reaction to send (if route_decision == 'emoji')."""
+    """Emoji reaction to send when antispam_node chooses reaction (not from route_node)."""
 
     semantic_context: list[str]
     """Relevant historical messages from semantic search (fresh per request, no reducer needed)."""
